@@ -1,5 +1,5 @@
 /* PaperPress service worker — precache app shell, runtime-cache fonts. */
-const CACHE = "paperpress-v2";
+const CACHE = "paperpress-v3";
 const SHELL = [
   "./",
   "./index.html",

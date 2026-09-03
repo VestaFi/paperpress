@@ -866,6 +866,7 @@
   let currentTool = null;
   let fileEntries = []; // { file, pageCount|null }
   let resultUrls = [];
+  let pendingLaunchFiles = []; // files handed over by the OS (PWA file handler)
 
   const viewHome = $("#view-home");
   const viewTool = $("#view-tool");
@@ -898,6 +899,13 @@
     viewHome.hidden = true;
     viewTool.hidden = false;
     window.scrollTo({ top: 0 });
+    if (pendingLaunchFiles.length) {
+      const handoff = pendingLaunchFiles;
+      pendingLaunchFiles = [];
+      const note = $("#launch-note");
+      if (note) note.hidden = true;
+      addFiles(handoff);
+    }
   }
 
   function goHome() {
@@ -1069,6 +1077,30 @@
   });
 
   runBtn.addEventListener("click", run);
+
+  // ---------- OS file handler (PWA) ----------
+
+  if ("launchQueue" in window) {
+    window.launchQueue.setConsumer(async (params) => {
+      if (!params.files?.length) return;
+      try {
+        pendingLaunchFiles = await Promise.all(params.files.map((h) => h.getFile()));
+      } catch (e) {
+        console.warn("Launch files unavailable:", e.message);
+        return;
+      }
+      const note = $("#launch-note");
+      if (note) {
+        const names = pendingLaunchFiles.map((f) => f.name).join(", ");
+        note.textContent = `→ ${names} ready — pick a tool and it'll be loaded in.`;
+        note.hidden = false;
+      }
+      // images go straight to the images tool
+      if (pendingLaunchFiles.every((f) => /\.(jpe?g|png)$/i.test(f.name))) {
+        openTool("images");
+      }
+    });
+  }
 
   // ---------- service worker ----------
 

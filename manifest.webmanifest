@@ -5,6 +5,16 @@
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
+  "file_handlers": [
+    {
+      "action": "./",
+      "accept": {
+        "application/pdf": [".pdf"],
+        "image/jpeg": [".jpg", ".jpeg"],
+        "image/png": [".png"]
+      }
+    }
+  ],
   "background_color": "#f6f1e7",
   "theme_color": "#f6f1e7",
   "icons": [

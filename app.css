@@ -560,3 +560,14 @@ main {
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* file-handler launch note */
+.launch-note {
+  border: 1.5px dashed var(--verm);
+  color: var(--verm);
+  background: #fdf3ef;
+  padding: 10px 14px;
+  font-size: 13px;
+  margin: 0 0 22px;
+  border-radius: 2px;
+}
