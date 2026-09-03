@@ -1078,29 +1078,21 @@
 
   runBtn.addEventListener("click", run);
 
-  // ---------- OS file handler (PWA) ----------
+  // ---------- bridge for the reader (viewer.js) ----------
 
-  if ("launchQueue" in window) {
-    window.launchQueue.setConsumer(async (params) => {
-      if (!params.files?.length) return;
-      try {
-        pendingLaunchFiles = await Promise.all(params.files.map((h) => h.getFile()));
-      } catch (e) {
-        console.warn("Launch files unavailable:", e.message);
-        return;
-      }
+  window.__pp = {
+    openTool,
+    stashLaunchFiles(files, tool) {
+      pendingLaunchFiles = files;
       const note = $("#launch-note");
-      if (note) {
-        const names = pendingLaunchFiles.map((f) => f.name).join(", ");
+      if (note && files.length) {
+        const names = files.map((f) => f.name).join(", ");
         note.textContent = `→ ${names} ready — pick a tool and it'll be loaded in.`;
         note.hidden = false;
       }
-      // images go straight to the images tool
-      if (pendingLaunchFiles.every((f) => /\.(jpe?g|png)$/i.test(f.name))) {
-        openTool("images");
-      }
-    });
-  }
+      if (tool) openTool(tool);
+    },
+  };
 
   // ---------- service worker ----------
 

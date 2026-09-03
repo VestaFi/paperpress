@@ -40,6 +40,15 @@
       <p class="intro">Pick a job. Everything runs in your browser — nothing is uploaded, works offline once installed.</p>
       <p id="launch-note" class="launch-note" hidden></p>
 
+      <button id="reader-open" class="reader-hero">
+        <span class="reader-glyph" aria-hidden="true">☖</span>
+        <span class="reader-text">
+          <span class="reader-name">The Reading Room</span>
+          <span class="reader-desc">Open a PDF to read — continuous scroll, zoom, search, bookmarks. Double-clicked PDFs land here.</span>
+        </span>
+        <span class="reader-cta">Open a PDF →</span>
+      </button>
+
       <h3 class="dept">Dept. I — Organize</h3>
       <div class="tool-grid">
         <button class="tool-card" data-tool="merge">
@@ -197,7 +206,65 @@
         </div>
       </div>
     </section>
+    <!-- ============ VIEWER ============ -->
+    <section id="view-viewer" class="view pv" hidden>
+      <div class="pv-toolbar">
+        <button id="pv-exit" class="pv-btn" title="Back to tools">←</button>
+        <button id="pv-sidebar-toggle" class="pv-btn" title="Toggle sidebar">☰</button>
+        <button id="pv-open" class="pv-btn" title="Open another PDF">📂</button>
+        <input type="file" id="pv-file" accept="application/pdf,.pdf" hidden>
+        <span id="pv-title" class="pv-title"></span>
+        <span class="pv-spacer"></span>
+        <button id="pv-prev" class="pv-btn" title="Previous page">‹</button>
+        <input id="pv-pageno" class="pv-pageno" type="number" min="1" value="1">
+        <span class="pv-of">/ <span id="pv-count">0</span></span>
+        <button id="pv-next" class="pv-btn" title="Next page">›</button>
+        <span class="pv-sep"></span>
+        <button id="pv-zoom-out" class="pv-btn" title="Zoom out">−</button>
+        <select id="pv-zoom-sel" class="pv-zoom">
+          <option value="fit-width">Fit width</option>
+          <option value="fit-page">Fit page</option>
+          <option value="50">50%</option>
+          <option value="100">100%</option>
+          <option value="150">150%</option>
+          <option value="200">200%</option>
+          <option value="custom" hidden>100%</option>
+        </select>
+        <button id="pv-zoom-in" class="pv-btn" title="Zoom in">+</button>
+        <span class="pv-sep"></span>
+        <button id="pv-rotate" class="pv-btn" title="Rotate view">⟳</button>
+        <button id="pv-print" class="pv-btn" title="Print">⎙</button>
+        <button id="pv-download" class="pv-btn" title="Save a copy">⬇</button>
+        <button id="pv-edit" class="pv-btn pv-btn-accent" title="Edit with the tools">Edit ✂</button>
+      </div>
+      <div class="pv-body">
+        <aside id="pv-sidebar" class="pv-sidebar open">
+          <div class="pv-tabs">
+            <button class="pv-tab on" data-tab="thumbs">Pages</button>
+            <button class="pv-tab" data-tab="outline">Marks</button>
+            <button class="pv-tab" data-tab="search">Find</button>
+          </div>
+          <div id="pv-thumbs" class="pv-thumbs"></div>
+          <div id="pv-outline" class="pv-outline" hidden></div>
+          <div id="pv-search-panel" class="pv-search-panel" hidden>
+            <div class="pv-search-row">
+              <input id="pv-search" class="pv-search" type="search" placeholder="Find in document…">
+              <button id="pv-match-prev" class="pv-btn" title="Previous match">‹</button>
+              <button id="pv-match-next" class="pv-btn" title="Next match">›</button>
+            </div>
+            <div id="pv-match-count" class="pv-match-count"></div>
+            <div id="pv-search-results" class="pv-search-results"></div>
+          </div>
+        </aside>
+        <div id="pv-scroll" class="pv-scroll">
+          <div id="pv-pages" class="pv-pages"></div>
+        </div>
+      </div>
+      <div id="pv-status" class="pv-status" role="status" aria-live="polite"></div>
+    </section>
   </main>
+
+  <div id="pv-print-area" class="pv-print-area" aria-hidden="true"></div>
 
   <footer class="colophon">
     <div class="rule-double" aria-hidden="true"></div>
@@ -207,5 +274,6 @@
   <script src="vendor/pdf-lib.min.js"></script>
   <script src="vendor/pdf.min.js"></script>
   <script src="app.js"></script>
+  <script src="viewer.js"></script>
 </body>
 </html>

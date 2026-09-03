@@ -3,6 +3,10 @@
 A Progressive Web App with iLovePDF-style tools that run **entirely in your browser**.
 No uploads, no accounts, no server — files never leave your device. Works offline once installed.
 
+## Reader
+
+PaperPress opens PDFs in **The Reading Room** by default — continuous scroll, fit-width/fit-page/percent zoom, page thumbnails, bookmark outline, full-text search with results list, text selection, view rotation, print, save-a-copy, and an "Edit" button that hands the open file to any tool. Keyboard: arrows/PgUp/PgDn/Home/End navigate, +/- zoom, Ctrl+F find.
+
 ## Tools (17)
 
 **Organize** — Merge · Split · Organize (visual reorder/rotate/delete with thumbnails) · Extract pages · Delete pages · Rotate · Crop (trim margins in mm)

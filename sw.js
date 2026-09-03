@@ -1,10 +1,11 @@
 /* PaperPress service worker — precache app shell, runtime-cache fonts. */
-const CACHE = "paperpress-v3";
+const CACHE = "paperpress-v4";
 const SHELL = [
   "./",
   "./index.html",
   "./app.css",
   "./app.js",
+  "./viewer.js",
   "./manifest.webmanifest",
   "./vendor/pdf-lib.min.js",
   "./vendor/pdf.min.js",
