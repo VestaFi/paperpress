@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PaperPress — PDF Tools</title>
+  <meta name="description" content="Free offline PDF tools. Merge, split, compress, sign, watermark and more — all in your browser. Files never leave your device.">
+  <meta name="theme-color" content="#f6f1e7">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="press-bg" aria-hidden="true"></div>
+
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="brand">
+        <div class="brand-stamp" aria-hidden="true">PP</div>
+        <div class="brand-text">
+          <h1>PaperPress</h1>
+          <p class="tagline">— local pdf workshop —</p>
+        </div>
+      </div>
+      <div class="masthead-meta">
+        <span class="meta-line">EST. 2026 · NO CLOUD</span>
+        <span class="meta-line accent" id="offline-badge">■ FILES STAY ON DEVICE</span>
+      </div>
+    </div>
+    <div class="rule-double" aria-hidden="true"></div>
+  </header>
+
+  <main id="main">
+    <!-- ============ HOME: tool grid ============ -->
+    <section id="view-home" class="view">
+      <p class="intro">Pick a job. Everything runs in your browser — nothing is uploaded, works offline once installed.</p>
+
+      <h3 class="dept">Dept. I — Organize</h3>
+      <div class="tool-grid">
+        <button class="tool-card" data-tool="merge">
+          <span class="tool-no">Nº 01</span>
+          <span class="tool-glyph" aria-hidden="true">⧉</span>
+          <span class="tool-name">Merge</span>
+          <span class="tool-desc">Bind several PDFs into one, in the order you choose.</span>
+        </button>
+        <button class="tool-card" data-tool="split">
+          <span class="tool-no">Nº 02</span>
+          <span class="tool-glyph" aria-hidden="true">✂</span>
+          <span class="tool-name">Split</span>
+          <span class="tool-desc">Cut a PDF into separate files by page or range.</span>
+        </button>
+        <button class="tool-card" data-tool="organize">
+          <span class="tool-no">Nº 03</span>
+          <span class="tool-glyph" aria-hidden="true">⠿</span>
+          <span class="tool-name">Organize</span>
+          <span class="tool-desc">See every page. Reorder, rotate or drop them visually.</span>
+        </button>
+        <button class="tool-card" data-tool="extract">
+          <span class="tool-no">Nº 04</span>
+          <span class="tool-glyph" aria-hidden="true">❏</span>
+          <span class="tool-name">Extract pages</span>
+          <span class="tool-desc">Pull chosen pages out into a new PDF.</span>
+        </button>
+        <button class="tool-card" data-tool="delete">
+          <span class="tool-no">Nº 05</span>
+          <span class="tool-glyph" aria-hidden="true">⌫</span>
+          <span class="tool-name">Delete pages</span>
+          <span class="tool-desc">Remove pages you don't want, keep the rest.</span>
+        </button>
+        <button class="tool-card" data-tool="rotate">
+          <span class="tool-no">Nº 06</span>
+          <span class="tool-glyph" aria-hidden="true">⟳</span>
+          <span class="tool-name">Rotate</span>
+          <span class="tool-desc">Turn all pages, or just some, by 90 / 180 / 270°.</span>
+        </button>
+        <button class="tool-card" data-tool="crop">
+          <span class="tool-no">Nº 07</span>
+          <span class="tool-glyph" aria-hidden="true">⌗</span>
+          <span class="tool-name">Crop</span>
+          <span class="tool-desc">Trim margins off every page, or a range, in millimetres.</span>
+        </button>
+      </div>
+
+      <h3 class="dept">Dept. II — Optimize</h3>
+      <div class="tool-grid">
+        <button class="tool-card" data-tool="compress">
+          <span class="tool-no">Nº 08</span>
+          <span class="tool-glyph" aria-hidden="true">▼</span>
+          <span class="tool-name">Compress</span>
+          <span class="tool-desc">Shrink file size by re-pressing pages as JPEG images.</span>
+        </button>
+        <button class="tool-card" data-tool="repair">
+          <span class="tool-no">Nº 09</span>
+          <span class="tool-glyph" aria-hidden="true">✚</span>
+          <span class="tool-name">Repair</span>
+          <span class="tool-desc">Rebuild a damaged PDF by re-writing its structure.</span>
+        </button>
+        <button class="tool-card" data-tool="unlock">
+          <span class="tool-no">Nº 10</span>
+          <span class="tool-glyph" aria-hidden="true">⚿</span>
+          <span class="tool-name">Unlock</span>
+          <span class="tool-desc">Strip permission restrictions from a PDF (best effort).</span>
+        </button>
+      </div>
+
+      <h3 class="dept">Dept. III — Convert</h3>
+      <div class="tool-grid">
+        <button class="tool-card" data-tool="images">
+          <span class="tool-no">Nº 11</span>
+          <span class="tool-glyph" aria-hidden="true">▣</span>
+          <span class="tool-name">Images → PDF</span>
+          <span class="tool-desc">Press JPG and PNG images onto A4 pages.</span>
+        </button>
+        <button class="tool-card" data-tool="tojpg">
+          <span class="tool-no">Nº 12</span>
+          <span class="tool-glyph" aria-hidden="true">◫</span>
+          <span class="tool-name">PDF → JPG</span>
+          <span class="tool-desc">Print each page as a JPG image at your chosen DPI.</span>
+        </button>
+        <button class="tool-card" data-tool="tomd">
+          <span class="tool-no">Nº 13</span>
+          <span class="tool-glyph" aria-hidden="true">¶</span>
+          <span class="tool-name">PDF → Markdown</span>
+          <span class="tool-desc">Extract the text of a PDF into a Markdown file.</span>
+        </button>
+      </div>
+
+      <h3 class="dept">Dept. IV — Edit &amp; sign</h3>
+      <div class="tool-grid">
+        <button class="tool-card" data-tool="watermark">
+          <span class="tool-no">Nº 14</span>
+          <span class="tool-glyph" aria-hidden="true">◈</span>
+          <span class="tool-name">Watermark</span>
+          <span class="tool-desc">Stamp text across every page — angle, size, opacity.</span>
+        </button>
+        <button class="tool-card" data-tool="pagenum">
+          <span class="tool-no">Nº 15</span>
+          <span class="tool-glyph" aria-hidden="true">№</span>
+          <span class="tool-name">Page numbers</span>
+          <span class="tool-desc">Add page numbers — pick position, style and start.</span>
+        </button>
+        <button class="tool-card" data-tool="sign">
+          <span class="tool-no">Nº 16</span>
+          <span class="tool-glyph" aria-hidden="true">✍</span>
+          <span class="tool-name">Sign</span>
+          <span class="tool-desc">Draw your signature and place it on any page.</span>
+        </button>
+        <button class="tool-card" data-tool="forms">
+          <span class="tool-no">Nº 17</span>
+          <span class="tool-glyph" aria-hidden="true">☰</span>
+          <span class="tool-name">Fill forms</span>
+          <span class="tool-desc">Fill in a PDF's form fields, optionally flatten them.</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- ============ TOOL VIEW ============ -->
+    <section id="view-tool" class="view" hidden>
+      <button id="back-btn" class="back-link">← All tools</button>
+      <div class="workbench">
+        <div class="bench-head">
+          <h2 id="tool-title"></h2>
+          <p id="tool-sub" class="bench-sub"></p>
+        </div>
+
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Add files">
+          <div class="drop-inner">
+            <span class="drop-glyph" aria-hidden="true">⬇</span>
+            <span class="drop-label">Drop files here or <u>browse</u></span>
+            <span class="drop-hint" id="drop-hint"></span>
+          </div>
+          <input type="file" id="file-input" hidden>
+        </div>
+
+        <ul id="file-list" class="file-list"></ul>
+
+        <div id="tool-options" class="options"></div>
+
+        <div class="run-row">
+          <button id="run-btn" class="run-btn" disabled>
+            <span class="run-label">Run the press</span>
+          </button>
+          <span id="status" class="status" role="status" aria-live="polite"></span>
+        </div>
+
+        <div id="results" class="results" hidden>
+          <div class="results-head">— OFF THE PRESS —</div>
+          <ul id="results-list" class="results-list"></ul>
+          <div id="dl-all-row" class="dl-all-row" hidden>
+            <button id="dl-all" class="dl-btn">Download all</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="colophon">
+    <div class="rule-double" aria-hidden="true"></div>
+    <p>Set &amp; bound entirely in your browser · powered by pdf-lib &amp; pdf.js · no accounts, no uploads, no tracking</p>
+  </footer>
+
+  <script src="vendor/pdf-lib.min.js"></script>
+  <script src="vendor/pdf.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
