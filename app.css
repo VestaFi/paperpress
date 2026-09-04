@@ -688,9 +688,18 @@ main {
   background: var(--card);
   display: flex;
   flex-direction: column;
-  transition: width 0.15s ease;
+  /* visibility keeps the closed sidebar's controls out of tab order and the
+     accessibility tree. Closing: the 0.15s delay hides the panel only after
+     the width finishes animating shut. Opening: visibility flips immediately
+     (0s, no delay) so the panel is focusable the moment it opens. */
+  visibility: hidden;
+  transition: width 0.15s ease, visibility 0s linear 0.15s;
 }
-.pv-sidebar.open { width: 230px; }
+.pv-sidebar.open {
+  width: 230px;
+  visibility: visible;
+  transition: width 0.15s ease, visibility 0s;
+}
 
 .pv-tabs { display: flex; border-bottom: 1.5px solid var(--line); }
 .pv-tab {

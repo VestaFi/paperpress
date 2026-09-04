@@ -5,7 +5,7 @@ No uploads, no accounts, no server — files never leave your device. Works offl
 
 ## Reader
 
-PaperPress opens PDFs in **The Reading Room** by default — continuous scroll, fit-width/fit-page/percent zoom, page thumbnails, bookmark outline, full-text search with results list, text selection, view rotation, print, save-a-copy, and an "Edit" button that hands the open file to any tool. Keyboard: arrows/PgUp/PgDn/Home/End navigate, +/- zoom, Ctrl+F find.
+Opening a PDF is PaperPress's primary action: the landing page leads with **Open a PDF**, and every opened PDF lands in **The Reading Room** — continuous scroll, fit-width/fit-page/percent zoom, page thumbnails, bookmark outline, full-text search with results list, text selection, view rotation, print, save-a-copy, and an "Edit" button that hands the open file to any tool. Documents open at Fit Width with the navigation sidebar closed (toggle it with ☰). Keyboard: arrows/PgUp/PgDn/Home/End navigate, +/- zoom, Ctrl+F find. The specialist tools remain available on the landing page below the reader.
 
 ## Tools (17)
 
