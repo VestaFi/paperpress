@@ -56,6 +56,7 @@
     $("#pv-search-results").innerHTML = "";
     $("#pv-match-count").textContent = "";
     setSidebarTab("thumbs");
+    setSidebar(false); // §3.1: left sidebar closed whenever a document opens
 
     buildShells();
     buildThumbs();
@@ -447,6 +448,21 @@
 
   // ---------- sidebar ----------
 
+  // Single writer for sidebar open state: CSS class, aria-expanded and focus
+  // protection stay in sync. `inert` (not CSS visibility alone) carries the
+  // focus/accessibility guarantee — it applies instantly and doesn't depend
+  // on the width transition running.
+  function setSidebar(openState) {
+    const sb = $("#pv-sidebar");
+    sb.classList.toggle("open", openState);
+    sb.inert = !openState;
+    $("#pv-sidebar-toggle").setAttribute("aria-expanded", String(openState));
+  }
+
+  function sidebarIsOpen() {
+    return $("#pv-sidebar").classList.contains("open");
+  }
+
   function setSidebarTab(tab) {
     document.querySelectorAll(".pv-tab").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
     $("#pv-thumbs").hidden = tab !== "thumbs";
@@ -489,7 +505,7 @@
     });
 
     $("#pv-sidebar-toggle").addEventListener("click", () => {
-      $("#pv-sidebar").classList.toggle("open");
+      setSidebar(!sidebarIsOpen());
       rerenderAll();
     });
     document.querySelectorAll(".pv-tab").forEach((b) =>
@@ -536,7 +552,7 @@
       if ((e.ctrlKey || e.metaKey) && e.key === "f") {
         e.preventDefault();
         setSidebarTab("search");
-        $("#pv-sidebar").classList.add("open");
+        setSidebar(true);
         $("#pv-search").focus();
         return;
       }
@@ -565,7 +581,7 @@
         const imgs = files.filter((f) => /\.(jpe?g|png)$/i.test(f.name));
         if (pdfs.length) {
           open(pdfs[0]).catch((err) => alert("Couldn't open PDF: " + err.message));
-          if (pdfs.length > 1) window.__pp?.stashLaunchFiles(pdfs.slice(1));
+          if (pdfs.length > 1) stashExtraPdfs(pdfs[0].name, pdfs.slice(1));
         } else if (imgs.length) {
           window.__pp?.stashLaunchFiles(imgs, "images");
         }
@@ -573,6 +589,18 @@
     }
   }
 
+  // Multi-PDF launch (no tabs): first file opens in the reader, the rest wait
+  // in the tools stash. The home banner says so honestly.
+  function stashExtraPdfs(openedName, extras) {
+    window.__pp?.stashLaunchFiles(extras);
+    const note = document.querySelector("#launch-note");
+    if (note) {
+      const n = extras.length;
+      note.textContent = `→ Opened "${openedName}" in the reader. ${n} more PDF${n === 1 ? "" : "s"} waiting below — pick a tool and ${n === 1 ? "it'll" : "they'll"} be loaded in.`;
+      note.hidden = false;
+    }
+  }
+
   wire();
-  window.__viewer = { open, exit };
+  window.__viewer = { open, exit, stashExtraPdfs };
 })();

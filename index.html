@@ -37,17 +37,17 @@
   <main id="main">
     <!-- ============ HOME: tool grid ============ -->
     <section id="view-home" class="view">
-      <p class="intro">Pick a job. Everything runs in your browser — nothing is uploaded, works offline once installed.</p>
-      <p id="launch-note" class="launch-note" hidden></p>
-
       <button id="reader-open" class="reader-hero">
         <span class="reader-glyph" aria-hidden="true">☖</span>
         <span class="reader-text">
           <span class="reader-name">The Reading Room</span>
-          <span class="reader-desc">Open a PDF to read — continuous scroll, zoom, search, bookmarks. Double-clicked PDFs land here.</span>
+          <span class="reader-desc">Continuous scroll, zoom, search, bookmarks — PDFs you open land here first.</span>
         </span>
         <span class="reader-cta">Open a PDF →</span>
       </button>
+
+      <p class="intro">Open a PDF to read. Need to change one? The workshop below merges, splits, compresses and more — everything runs in your browser, nothing is uploaded, works offline once installed.</p>
+      <p id="launch-note" class="launch-note" hidden></p>
 
       <h3 class="dept">Dept. I — Organize</h3>
       <div class="tool-grid">
@@ -210,7 +210,7 @@
     <section id="view-viewer" class="view pv" hidden>
       <div class="pv-toolbar">
         <button id="pv-exit" class="pv-btn" title="Back to tools">←</button>
-        <button id="pv-sidebar-toggle" class="pv-btn" title="Toggle sidebar">☰</button>
+        <button id="pv-sidebar-toggle" class="pv-btn" title="Toggle sidebar" aria-expanded="false" aria-controls="pv-sidebar">☰</button>
         <button id="pv-open" class="pv-btn" title="Open another PDF">📂</button>
         <input type="file" id="pv-file" accept="application/pdf,.pdf" hidden>
         <span id="pv-title" class="pv-title"></span>
@@ -238,7 +238,7 @@
         <button id="pv-edit" class="pv-btn pv-btn-accent" title="Edit with the tools">Edit ✂</button>
       </div>
       <div class="pv-body">
-        <aside id="pv-sidebar" class="pv-sidebar open">
+        <aside id="pv-sidebar" class="pv-sidebar" inert>
           <div class="pv-tabs">
             <button class="pv-tab on" data-tab="thumbs">Pages</button>
             <button class="pv-tab" data-tab="outline">Marks</button>
