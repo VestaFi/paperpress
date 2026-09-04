@@ -25,6 +25,18 @@
   const pagesEl = () => $("#pv-pages");
   const scrollEl = () => $("#pv-scroll");
 
+  // The reader is a full-viewport surface, but it lives inside <main>, whose
+  // stacking context (z-index 1) sits below the later .colophon sibling — so
+  // page chrome would paint over the fixed reader and steal its clicks. While
+  // the reader is active the chrome is hidden entirely ([hidden] is
+  // display:none !important in app.css), which also stops it adding body
+  // height behind the reader.
+  function setPageChromeVisible(visible) {
+    document.querySelectorAll(".masthead, .colophon").forEach((el) => {
+      el.hidden = !visible;
+    });
+  }
+
   // ---------- open / close ----------
 
   async function open(file) {
@@ -48,6 +60,7 @@
 
     $("#view-home").hidden = true;
     $("#view-tool").hidden = true;
+    setPageChromeVisible(false);
     viewEl().hidden = false;
     $("#pv-title").textContent = file.name;
     $("#pv-count").textContent = String(state.pageCount);
@@ -76,6 +89,7 @@
   }
 
   function exit() {
+    setPageChromeVisible(true); // restore chrome first — later teardown must not leave it hidden
     closeDoc();
     viewEl().hidden = true;
     $("#view-home").hidden = false;

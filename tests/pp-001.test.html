@@ -61,6 +61,24 @@ normal behaviour and does not affect these assertions.</p>
     return `${regs.length} SW, ${keys.length} caches removed`;
   });
 
+  // Simple static servers send no Cache-Control, so the browser may satisfy
+  // the iframe's script loads from a stale heuristic HTTP cache. cache:"reload"
+  // refetches each shell file and replaces its cache entry first (same-origin
+  // only — no external calls).
+  let shellFresh = false;
+  await check("harness: app shell refreshed past HTTP cache", async () => {
+    for (const f of ["/index.html", "/app.css", "/app.js", "/viewer.js"]) {
+      const r = await fetch(f, { cache: "reload" });
+      assert(r.ok, f + " fetch failed: " + r.status);
+    }
+    shellFresh = true;
+  });
+  if (!shellFresh) {
+    // running on would test stale cached code and report misleading results
+    summaryEl.textContent = "aborted — app shell could not be refreshed";
+    return;
+  }
+
   // wait for the app iframe to finish loading its scripts (poll — the load
   // event may already have fired before this script attaches a listener)
   const frame = document.getElementById("app");
@@ -238,6 +256,54 @@ normal behaviour and does not affect these assertions.</p>
     D.querySelector('[data-tool="extract"]').click();
     await sleep(400);
     assert(D.querySelectorAll("#file-list .file-item").length === 1, "stashed file not loaded into tool");
+  });
+
+  // ---- colophon-overlay fix regressions (fix/reader-colophon-overlay) ----
+  // offsetParent === null is the reliable "not painted" proxy here: [hidden]
+  // maps to display:none !important, which removes the box entirely. Viewport
+  // size measurements are NOT asserted — they are degenerate in the hidden
+  // automation pane.
+  const chrome = () => [D.querySelector(".masthead"), D.querySelector(".colophon")];
+
+  await check("m1. Masthead and colophon visible outside the reader", () => {
+    for (const el of chrome()) {
+      assert(el, "chrome element missing");
+      assert(!el.hidden, el.className + " is hidden outside reader");
+      assert(el.offsetParent !== null || W.getComputedStyle(el).display !== "none",
+        el.className + " not rendered outside reader");
+    }
+  });
+
+  await check("m2. Both hidden (unpainted) while a PDF is open", async () => {
+    await W.__viewer.open(fixtureA);
+    await sleep(300);
+    for (const el of chrome()) {
+      assert(el.hidden === true, el.className + " not hidden in reader");
+      assert(el.offsetParent === null, el.className + " still painted in reader");
+    }
+  });
+
+  await check("m3. Both restored after exiting the reader", async () => {
+    W.__viewer.exit();
+    await sleep(100);
+    for (const el of chrome()) {
+      assert(el.hidden === false, el.className + " still hidden after exit");
+      assert(W.getComputedStyle(el).display !== "none", el.className + " not rendered after exit");
+    }
+    assert(!D.querySelector("#view-home").hidden, "home view not restored");
+  });
+
+  await check("m4. Hidden again on a second open (symmetry)", async () => {
+    await W.__viewer.open(fixtureB);
+    await sleep(300);
+    for (const el of chrome()) {
+      assert(el.hidden === true && el.offsetParent === null, el.className + " visible on reopen");
+    }
+    W.__viewer.exit();
+    await sleep(100);
+    for (const el of chrome()) {
+      assert(el.hidden === false, el.className + " not restored after final exit");
+    }
   });
 
   summaryEl.textContent = `${passCount} passed, ${failCount} failed`;
