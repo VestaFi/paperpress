@@ -306,6 +306,178 @@ normal behaviour and does not affect these assertions.</p>
     }
   });
 
+  // ---- Fit Page navigation regressions (fix/fit-page-navigation) ----
+  // Assertions compare page-shell rectangles against the scroll container's
+  // rectangle. The iframe has fixed CSS dimensions, so this geometry is real
+  // even when the outer window is hidden — but a sanity check below still
+  // refuses to run against a degenerate (unpainted) layout, so a broken
+  // environment can never produce a vacuous pass.
+  const TOL = 1.5; // px, subpixel rounding only — larger gaps must fail
+
+  const scEl = () => D.querySelector("#pv-scroll");
+  function pageRects(n) {
+    const shell = D.querySelector(`.pv-page[data-page="${n}"]`);
+    const r = shell.getBoundingClientRect();
+    const s = scEl().getBoundingClientRect();
+    return { r, s, topGap: r.top - s.top, bottomGap: s.bottom - r.bottom };
+  }
+  function visibility(n) {
+    const { r, s } = pageRects(n);
+    return {
+      realLayout: s.height > 100 && r.height > 50,
+      topOk: r.top >= s.top - TOL,
+      bottomOk: r.bottom <= s.bottom + TOL,
+      topClip: (s.top - r.top).toFixed(1),
+      bottomClip: (r.bottom - s.bottom).toFixed(1),
+    };
+  }
+  function assertFullyVisible(n, label) {
+    const v = visibility(n);
+    assert(v.realLayout, "scroll container/page has no real layout (env sanity)");
+    assert(v.topOk, `${label}: page ${n} top clipped by ${v.topClip}px`);
+    assert(v.bottomOk, `${label}: page ${n} bottom clipped by ${v.bottomClip}px`);
+  }
+  // Poll the settled end-state. The app's resize path re-renders on
+  // requestAnimationFrame, which is throttled in a background/hidden pane, so
+  // the final correct geometry can arrive several frames after navigation.
+  // This asserts the page DOES become fully visible; if it never does (a real
+  // clip) it still fails after the timeout — nothing is masked.
+  async function assertBecomesFullyVisible(n, label, tries = 20) {
+    let v;
+    for (let i = 0; i < tries; i++) {
+      v = visibility(n);
+      if (v.realLayout && v.topOk && v.bottomOk) return;
+      await sleep(100);
+    }
+    assert(false, `${label}: page ${n} never fully visible (topClip ${v.topClip}, bottomClip ${v.bottomClip})`);
+  }
+  async function setZoom(mode) {
+    const sel = D.querySelector("#pv-zoom-sel");
+    sel.value = mode;
+    sel.dispatchEvent(new W.Event("change", { bubbles: true }));
+    await sleep(500);
+  }
+  async function gotoPage(n) {
+    const input = D.querySelector("#pv-pageno");
+    input.value = String(n);
+    input.dispatchEvent(new W.Event("change", { bubbles: true }));
+    await sleep(400);
+  }
+
+  let fixtureN = null;
+  await check("harness: 5-page navigation fixture generated", async () => {
+    fixtureN = await makePdf(5, "fixture-nav");
+    await W.__viewer.open(fixtureN);
+    await sleep(500);
+    await setZoom("fit-page");
+  });
+  if (!fixtureN) { summaryEl.textContent = "aborted — navigation fixture failed"; return; }
+
+  await check("n1. Fit Page: next-button through pages 2-4 fully visible", async () => {
+    await gotoPage(1);
+    for (const n of [2, 3, 4]) {
+      D.querySelector("#pv-next").click();
+      await sleep(400);
+      assertFullyVisible(n, "next-button");
+    }
+    const g = pageRects(4);
+    return `page 4 topGap ${g.topGap.toFixed(1)}px, bottomGap ${g.bottomGap.toFixed(1)}px`;
+  });
+
+  // Keyboard paths use synthetic (untrusted) KeyboardEvents; the app's own
+  // document-level keydown listener handles them identically to trusted input
+  // (same listener already exercised by test g). Stated limitation: these are
+  // not OS-level trusted events.
+  await check("n2. Fit Page: PageDown, ArrowRight and page-number input", async () => {
+    await gotoPage(1);
+    D.dispatchEvent(new W.KeyboardEvent("keydown", { key: "PageDown", bubbles: true, cancelable: true }));
+    await sleep(400);
+    assertFullyVisible(2, "PageDown");
+    D.dispatchEvent(new W.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
+    await sleep(400);
+    assertFullyVisible(3, "ArrowRight");
+    await gotoPage(5);
+    assertFullyVisible(5, "pageno-input");
+  });
+
+  await check("n3. Fit Page visibility with sidebar open and closed", async () => {
+    D.querySelector("#pv-sidebar-toggle").click();
+    await sleep(400);
+    await gotoPage(2);
+    assertFullyVisible(2, "sidebar-open");
+    D.querySelector("#pv-sidebar-toggle").click();
+    await sleep(400);
+    await gotoPage(4);
+    assertFullyVisible(4, "sidebar-closed");
+  });
+
+  // Wait until two consecutive geometry reads agree — the app's resize path
+  // (rerenderAll) resizes shells over a couple of frames, and navigating
+  // mid-relayout races the measurement rather than testing the behaviour.
+  async function settleLayout() {
+    let prev = "";
+    for (let i = 0; i < 30; i++) {
+      const shell = D.querySelector('.pv-page[data-page="3"]');
+      const cur = [scEl().clientHeight, scEl().clientWidth, shell.offsetTop,
+                   Math.round(shell.getBoundingClientRect().height)].join(",");
+      if (cur === prev) return;
+      prev = cur;
+      await sleep(100);
+    }
+    throw new Error("layout did not settle after resize");
+  }
+
+  // Resize the iframe HEIGHT, not width. Fit Page scale is height-driven
+  // (availH = clientHeight - 32), so changing height exercises the
+  // resize -> recalculate -> navigate path directly, without depending on the
+  // toolbar wrapping — that width-driven reflow is timing-sensitive in a
+  // hidden pane and is left to the manual checklist.
+  await check("n4. Fit Page visibility after viewer resize", async () => {
+    const oldH = frame.style.height;
+    frame.style.height = "560px"; // fires the app's window resize -> rerenderAll
+    await settleLayout();
+    await gotoPage(3);
+    await assertBecomesFullyVisible(3, "after-resize");
+    frame.style.height = oldH;
+    await settleLayout();
+    await gotoPage(2);
+    await assertBecomesFullyVisible(2, "after-restore");
+  });
+
+  await check("n5. Fit Width regression: top-aligned anchor, fills width", async () => {
+    await setZoom("fit-width");
+    await gotoPage(3);
+    const { r, s, topGap } = pageRects(3);
+    assert(s.height > 100, "scroll container has no real layout (env sanity)");
+    assert(topGap >= -TOL && topGap <= 13 + TOL, `top anchor out of range: ${topGap.toFixed(1)}px`);
+    const expectedW = scEl().clientWidth - 48;
+    assert(Math.abs(r.width - expectedW) <= 2, `width ${r.width.toFixed(1)} != avail ${expectedW}`);
+    return `topGap ${topGap.toFixed(1)}px`;
+  });
+
+  // Limitation, stated accurately: native scroll-event dispatch is
+  // frame-aligned and does not fire in a hidden automation pane, so this test
+  // sets scrollTop and dispatches the scroll event itself. That exercises the
+  // app's actual scroll listener and tracking logic end-to-end; only the
+  // browser's own event dispatch is left to the manual checklist.
+  await check("n6. Continuous scroll: free scrolling + page tracking intact", async () => {
+    const sc = scEl();
+    const track = () => sc.dispatchEvent(new W.Event("scroll"));
+    sc.scrollTop = 0;
+    track();
+    await sleep(200);
+    assert(D.querySelector("#pv-pageno").value === "1", "tracker not at page 1, got " + D.querySelector("#pv-pageno").value);
+    const target = Math.round(sc.scrollHeight * 0.55);
+    sc.scrollTop = target;
+    track();
+    await sleep(300);
+    assert(Math.abs(sc.scrollTop - target) <= 2, `scroll snapped: set ${target}, now ${sc.scrollTop}`);
+    const shown = parseInt(D.querySelector("#pv-pageno").value, 10);
+    assert(shown >= 2 && shown <= 5, "tracker did not follow manual scroll: " + shown);
+    W.__viewer.exit();
+    await sleep(100);
+  });
+
   summaryEl.textContent = `${passCount} passed, ${failCount} failed`;
   summaryEl.style.color = failCount ? "#c0281a" : "#1a7a2e";
   document.title = (failCount ? "FAIL " : "PASS ") + "PP-001 tests";
