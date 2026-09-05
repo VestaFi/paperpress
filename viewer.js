@@ -64,7 +64,6 @@
     viewEl().hidden = false;
     $("#pv-title").textContent = file.name;
     $("#pv-count").textContent = String(state.pageCount);
-    $("#pv-pageno").value = "1";
     $("#pv-search").value = "";
     $("#pv-search-results").innerHTML = "";
     $("#pv-match-count").textContent = "";
@@ -76,6 +75,9 @@
     buildOutline();
     updateZoomLabel();
     scrollEl().scrollTop = 0;
+    // Thumbnails now exist — apply page-1 state (field + highlight + aria)
+    // through the single owner.
+    synchroniseCurrentPage(1);
   }
 
   function closeDoc() {
@@ -222,6 +224,37 @@
     });
   }
 
+  // Single owner of current-page presentation: state.currentPage, the
+  // page-number field, and the thumbnail highlight + aria-current. It never
+  // scrolls the PDF viewport and never touches document/dirty state. Safe
+  // before thumbnails exist and while the sidebar is closed or inert.
+  function synchroniseCurrentPage(pageNumber) {
+    const n = Math.min(state.pageCount || 1, Math.max(1, pageNumber | 0));
+    state.currentPage = n;
+    // Don't stomp the value while the user is actively editing the field;
+    // the field's own commit/blur handlers reconcile it to state afterwards.
+    const input = $("#pv-pageno");
+    if (input && document.activeElement !== input) input.value = String(n);
+
+    const thumbs = $("#pv-thumbs");
+    if (!thumbs) return; // thumbnails not built yet — nothing more to do
+    thumbs.querySelectorAll(".pv-thumb.current").forEach((t) => {
+      t.classList.remove("current");
+      t.removeAttribute("aria-current");
+    });
+    const cur = thumbs.querySelector(`.pv-thumb[data-page="${n}"]`);
+    if (cur) {
+      cur.classList.add("current");
+      cur.setAttribute("aria-current", "page");
+      // Bring it into view inside the thumbnail rail only, never the PDF
+      // viewport, and only when the rail is actually visible.
+      if (thumbs.offsetParent !== null) {
+        const tr = cur.getBoundingClientRect(), cr = thumbs.getBoundingClientRect();
+        if (tr.top < cr.top || tr.bottom > cr.bottom) cur.scrollIntoView({ block: "nearest" });
+      }
+    }
+  }
+
   function trackCurrentPage() {
     const sr = scrollEl().getBoundingClientRect();
     const mid = sr.top + sr.height * 0.4;
@@ -231,13 +264,10 @@
       const d = Math.abs((r.top + r.bottom) / 2 - mid);
       if (d < bestDist) { bestDist = d; best = parseInt(shell.dataset.page, 10); }
     });
-    if (best !== state.currentPage) {
-      state.currentPage = best;
-      $("#pv-pageno").value = String(best);
-      const t = document.querySelector(`#pv-thumbs .pv-thumb.current`);
-      t?.classList.remove("current");
-      document.querySelector(`#pv-thumbs .pv-thumb[data-page="${best}"]`)?.classList.add("current");
-    }
+    // Guarded: after an explicit nav, scrollToPage already set currentPage, so
+    // a settling scroll event sees best === currentPage and does nothing — no
+    // flicker. Ordinary scrolling changes best and updates through the helper.
+    if (best !== state.currentPage) synchroniseCurrentPage(best);
   }
 
   function scrollToPage(n) {
@@ -245,8 +275,7 @@
     const shell = document.querySelector(`#pv-pages .pv-page[data-page="${n}"]`);
     if (shell) {
       scrollEl().scrollTo({ top: shell.offsetTop - 12, behavior: "auto" });
-      state.currentPage = n;
-      $("#pv-pageno").value = String(n);
+      synchroniseCurrentPage(n);
     }
   }
 
@@ -292,7 +321,8 @@
 
     for (let i = 1; i <= state.pageCount; i++) {
       const t = document.createElement("button");
-      t.className = "pv-thumb" + (i === 1 ? " current" : "");
+      // No initial .current here — synchroniseCurrentPage owns the highlight.
+      t.className = "pv-thumb";
       t.dataset.page = String(i);
       t.innerHTML = `<span class="pv-thumb-box"></span><span class="pv-thumb-no">${i}</span>`;
       t.addEventListener("click", () => scrollToPage(i));
@@ -496,9 +526,52 @@
       e.target.value = "";
     });
 
-    $("#pv-pageno").addEventListener("change", (e) => {
-      const n = parseInt(e.target.value, 10);
-      if (!isNaN(n)) scrollToPage(n);
+    // Page-number field: a text input (type=number exposes no selection API in
+    // Chromium/Edge). Enter and blur both commit through one shared function;
+    // Escape cancels. Per-session flags (local to this interaction) ensure a
+    // value commits at most once and a cancelled value never commits.
+    const pageInput = $("#pv-pageno");
+    let editing = false, committed = false, cancelled = false;
+
+    // The single entry point that turns field text into navigation. It never
+    // writes current-page state itself — scrollToPage -> synchroniseCurrentPage
+    // remains the only owner — and always leaves the field showing the
+    // canonical clamped page.
+    function commitPageInput() {
+      const n = parseInt(pageInput.value.trim(), 10); // parseInt-style: "3.8"->3, " 4 "->4
+      if (isNaN(n)) {
+        pageInput.value = String(state.currentPage);  // empty / whitespace / non-numeric
+      } else {
+        scrollToPage(n);                              // clamps 0/-5/9999 via synchronise
+        pageInput.value = String(state.currentPage);  // canonical page after clamp
+      }
+    }
+
+    pageInput.addEventListener("focus", () => {
+      // First focus of a session selects all so typing replaces the value; the
+      // flag stops re-selecting on later clicks so the caret can be placed.
+      if (!editing) {
+        editing = true; committed = false; cancelled = false;
+        pageInput.select();
+      }
+    });
+    pageInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault(); e.stopPropagation();
+        commitPageInput();
+        committed = true;   // the following blur must not commit again
+        pageInput.blur();
+      } else if (e.key === "Escape") {
+        e.preventDefault(); e.stopPropagation();
+        cancelled = true;   // the following blur must not commit the discarded text
+        pageInput.value = String(state.currentPage); // restore, no navigation
+        pageInput.blur();
+      }
+    });
+    pageInput.addEventListener("blur", () => {
+      if (!cancelled && !committed) commitPageInput(); // commit valid / restore invalid, once
+      else if (cancelled) pageInput.value = String(state.currentPage);
+      editing = false; committed = false; cancelled = false; // reset for next session
     });
     $("#pv-prev").addEventListener("click", () => scrollToPage(state.currentPage - 1));
     $("#pv-next").addEventListener("click", () => scrollToPage(state.currentPage + 1));

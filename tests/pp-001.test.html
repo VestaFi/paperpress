@@ -358,9 +358,11 @@ normal behaviour and does not affect these assertions.</p>
     await sleep(500);
   }
   async function gotoPage(n) {
+    // Commit through the real page-input path: focus, set value, press Enter.
     const input = D.querySelector("#pv-pageno");
+    input.focus();
     input.value = String(n);
-    input.dispatchEvent(new W.Event("change", { bubbles: true }));
+    input.dispatchEvent(new W.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
     await sleep(400);
   }
 
@@ -474,6 +476,246 @@ normal behaviour and does not affect these assertions.</p>
     assert(Math.abs(sc.scrollTop - target) <= 2, `scroll snapped: set ${target}, now ${sc.scrollTop}`);
     const shown = parseInt(D.querySelector("#pv-pageno").value, 10);
     assert(shown >= 2 && shown <= 5, "tracker did not follow manual scroll: " + shown);
+    W.__viewer.exit();
+    await sleep(100);
+  });
+
+  // ---- viewer navigation-state regressions (fix/viewer-navigation-state) ----
+  // Every explicit nav route funnels through scrollToPage -> synchroniseCurrentPage,
+  // which owns state.currentPage, the page field, and the thumbnail highlight +
+  // aria-current. These assert the three stay in lockstep and exactly one
+  // thumbnail is current.
+  const pageInput = () => D.querySelector("#pv-pageno");
+  // The helper keeps the (unfocused) field equal to state.currentPage, so the
+  // field value is a faithful proxy for committed page state.
+  const state_page = () => parseInt(pageInput().value, 10);
+  const currentThumbs = () => D.querySelectorAll('#pv-thumbs .pv-thumb.current');
+  const ariaThumbs = () => D.querySelectorAll('#pv-thumbs .pv-thumb[aria-current="page"]');
+  function assertTriple(n, label) {
+    // read state.currentPage indirectly via the field, which the helper keeps
+    // equal to state.currentPage; also assert the highlight set directly.
+    assert(pageInput().value === String(n), `${label}: page field ${pageInput().value} != ${n}`);
+    const cur = currentThumbs();
+    assert(cur.length === 1, `${label}: ${cur.length} thumbnails have .current (want 1)`);
+    assert(cur[0].dataset.page === String(n), `${label}: highlight on page ${cur[0].dataset.page} != ${n}`);
+    const aria = ariaThumbs();
+    assert(aria.length === 1 && aria[0].dataset.page === String(n),
+      `${label}: aria-current not solely on page ${n} (found ${aria.length})`);
+  }
+  const key = (k, opts = {}) => D.dispatchEvent(new W.KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...opts }));
+
+  await check("harness: nav-state fixture opened with sidebar", async () => {
+    await W.__viewer.open(fixtureN);
+    await sleep(500);
+    D.querySelector("#pv-sidebar-toggle").click(); // open sidebar so thumbs render
+    await sleep(300);
+    assertTriple(1, "initial");
+  });
+
+  await check("s1. Next / Previous update state, field and single highlight", async () => {
+    D.querySelector("#pv-next").click(); await sleep(300); assertTriple(2, "next");
+    D.querySelector("#pv-next").click(); await sleep(300); assertTriple(3, "next");
+    D.querySelector("#pv-prev").click(); await sleep(300); assertTriple(2, "prev");
+  });
+
+  await check("s2. PageDown / ArrowRight update the triple", async () => {
+    await gotoPage(1); assertTriple(1, "reset");
+    key("PageDown"); await sleep(300); assertTriple(2, "PageDown");
+    key("ArrowRight"); await sleep(300); assertTriple(3, "ArrowRight");
+  });
+
+  await check("s3. PageUp / ArrowLeft update the triple", async () => {
+    key("PageUp"); await sleep(300); assertTriple(2, "PageUp");
+    key("ArrowLeft"); await sleep(300); assertTriple(1, "ArrowLeft");
+  });
+
+  await check("s4. Direct page-number entry updates the triple", async () => {
+    await gotoPage(4); assertTriple(4, "pageno");
+  });
+
+  await check("s5. Thumbnail click updates the triple", async () => {
+    D.querySelector('#pv-thumbs .pv-thumb[data-page="2"]').click();
+    await sleep(300); assertTriple(2, "thumb-click");
+  });
+
+  await check("s6. Home / End highlight first and last page", async () => {
+    key("Home"); await sleep(300); assertTriple(1, "Home");
+    key("End"); await sleep(300); assertTriple(5, "End");
+  });
+
+  await check("s7. Only one thumbnail is ever current", async () => {
+    for (const n of [1, 3, 5, 2]) { await gotoPage(n); assert(currentThumbs().length === 1, `page ${n}: ${currentThumbs().length} current`); }
+  });
+
+  await check("s8. Continuous scroll still moves highlight and field together", async () => {
+    const sc = scEl();
+    sc.scrollTop = Math.round(sc.scrollHeight * 0.55);
+    sc.dispatchEvent(new W.Event("scroll"));
+    await sleep(300);
+    const n = parseInt(pageInput().value, 10);
+    assert(n >= 2, "field did not follow scroll: " + n);
+    assertTriple(n, "scroll");
+  });
+
+  await check("s9. Sidebar closed: nav does not throw, state stays correct", async () => {
+    D.querySelector("#pv-sidebar-toggle").click(); // close sidebar
+    await sleep(300);
+    D.querySelector("#pv-next").click(); await sleep(300);
+    await gotoPage(3);
+    assert(pageInput().value === "3", "field wrong with sidebar closed: " + pageInput().value);
+    // reopen: the correct thumbnail must be current
+    D.querySelector("#pv-sidebar-toggle").click();
+    await sleep(300);
+    assertTriple(3, "reopened-sidebar");
+  });
+
+  await check("s10. Opening another PDF resets to page 1", async () => {
+    const other = await makePdf(3, "s10-other"); // fresh fixture, no shared state
+    await W.__viewer.open(other);
+    await sleep(500);
+    D.querySelector("#pv-sidebar-toggle").click();
+    await sleep(300);
+    assertTriple(1, "new-doc");
+    D.querySelector("#pv-sidebar-toggle").click();
+    await sleep(200);
+  });
+
+  // Limitation, stated accurately: element.focus()/blur() do not emit focus/blur
+  // events in a hidden automation pane, so s11 and s14 dispatch those events
+  // explicitly to exercise the handler logic deterministically. Real pointer
+  // focus/blur is covered by the manual checklist. select() itself is exercised
+  // here on the text input (type=number exposes no selection API).
+  await check("s11. Focus selects the whole page value", async () => {
+    const f11 = await makePdf(5, "s11-fixture");
+    await W.__viewer.open(f11);
+    await sleep(400);
+    const inp = pageInput();
+    delete inp.dataset.editing;
+    inp.setSelectionRange(inp.value.length, inp.value.length); // caret at end first
+    inp.dispatchEvent(new W.FocusEvent("focus"));              // handler runs select()
+    assert(inp.selectionStart === 0 && inp.selectionEnd === inp.value.length,
+      `selection ${inp.selectionStart}..${inp.selectionEnd} of "${inp.value}"`);
+  });
+
+  await check("s12. Typing after focus replaces, Enter navigates", async () => {
+    const inp = pageInput();
+    inp.focus(); await sleep(30);           // selects all (whole value)
+    inp.value = "3";                        // simulates replace-on-type
+    inp.dispatchEvent(new W.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    await sleep(300);
+    assert(inp.value === "3", "field not committed: " + inp.value);
+    assert(state_page() === 3, "did not navigate to 3");
+  });
+
+  await check("s13. Escape restores the actual current page without navigating", async () => {
+    await gotoPage(2);
+    const inp = pageInput();
+    inp.focus(); inp.value = "5";
+    inp.dispatchEvent(new W.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await sleep(200);
+    assert(inp.value === "2", "Escape did not restore: " + inp.value);
+    assert(state_page() === 2, "Escape navigated (page now " + state_page() + ")");
+  });
+
+  await check("s14. Blur restores empty/invalid input", async () => {
+    await gotoPage(3);
+    const inp = pageInput();
+    // dispatch blur explicitly (see s11 note on hidden-pane focus/blur events)
+    inp.value = ""; inp.dispatchEvent(new W.FocusEvent("blur"));
+    assert(inp.value === "3", "empty blur not restored: " + inp.value);
+    inp.value = "abc"; inp.dispatchEvent(new W.FocusEvent("blur"));
+    assert(inp.value === "3", "invalid blur not restored: " + inp.value);
+  });
+
+  await check("s15. Zero, negative and excessive values resolve safely", async () => {
+    await gotoPage(0);   assert(state_page() === 1, "0 did not clamp to 1: " + state_page());
+    await gotoPage(-5);  assert(state_page() === 1, "-5 did not clamp to 1: " + state_page());
+    await gotoPage(999); assert(state_page() === 5, "999 did not clamp to last: " + state_page());
+    assertTriple(5, "clamp-high");
+    W.__viewer.exit();
+    await sleep(100);
+  });
+
+  // ---- commit-on-blur corrections (valid blur commits; no double/cancelled commit) ----
+  // A navigation "commit" is counted by wrapping the scroll container's
+  // scrollTo — scrollToPage calls it exactly once per real navigation, so the
+  // counter proves "commits exactly once" without hooking private functions.
+  // focus/blur are dispatched explicitly (hidden-pane limitation, see s11 note).
+  await check("harness: page-input fixture + commit counter armed", async () => {
+    const f = await makePdf(5, "p-fixture");
+    await W.__viewer.open(f);
+    await sleep(400);
+    D.querySelector("#pv-sidebar-toggle").click(); // open rail so highlight is observable
+    await sleep(300);
+  });
+
+  const sc = scEl();
+  let navCount = 0;
+  const _origScrollTo = sc.scrollTo.bind(sc);
+  sc.scrollTo = (...a) => { navCount++; return _origScrollTo(...a); };
+  const startEdit = (inp) => { inp.dispatchEvent(new W.FocusEvent("blur")); inp.dispatchEvent(new W.FocusEvent("focus")); };
+  const doBlur = (inp) => inp.dispatchEvent(new W.FocusEvent("blur"));
+  const enterKey = (inp) => inp.dispatchEvent(new W.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  const escKey = (inp) => inp.dispatchEvent(new W.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+
+  await check("p15. Valid blur commits exactly once", async () => {
+    await gotoPage(2);
+    const inp = pageInput();
+    startEdit(inp); inp.value = "4"; navCount = 0;
+    doBlur(inp);                       // blur without Enter must commit
+    await sleep(300);
+    assert(navCount === 1, `expected 1 navigation, got ${navCount}`);
+    assert(state_page() === 4 && inp.value === "4", "field/state not 4: " + inp.value + "/" + state_page());
+    assertTriple(4, "p15");
+  });
+
+  await check("p16. Enter then blur does not double-commit", async () => {
+    await gotoPage(2);
+    const inp = pageInput();
+    startEdit(inp); inp.value = "4"; navCount = 0;
+    enterKey(inp);                     // commit #1
+    doBlur(inp);                       // must NOT commit again (committed flag)
+    await sleep(300);
+    assert(navCount === 1, `expected 1 navigation, got ${navCount}`);
+    assertTriple(4, "p16");
+  });
+
+  await check("p17. Escape then blur does not commit", async () => {
+    await gotoPage(3);
+    const inp = pageInput();
+    startEdit(inp); inp.value = "5"; navCount = 0;
+    escKey(inp);                       // cancel: restore 3, no nav
+    doBlur(inp);                       // must NOT commit the discarded "5"
+    await sleep(300);
+    assert(navCount === 0, `escape must not navigate, got ${navCount} navigations`);
+    assert(state_page() === 3 && inp.value === "3", "not restored to 3: " + inp.value + "/" + state_page());
+    assertTriple(3, "p17");
+  });
+
+  await check("p18. Invalid blur restores canonical page (empty / whitespace / non-numeric)", async () => {
+    const inp = pageInput();
+    for (const bad of ["", "   ", "abc"]) {
+      await gotoPage(2);
+      startEdit(inp); inp.value = bad; navCount = 0;
+      doBlur(inp);
+      await sleep(150);
+      assert(navCount === 0, `"${bad}": expected no navigation, got ${navCount}`);
+      assert(state_page() === 2 && inp.value === "2", `"${bad}": not restored to 2, got ${inp.value}`);
+    }
+  });
+
+  await check("p19. Blur clamping and parseInt interpretation", async () => {
+    const inp = pageInput();
+    const cases = [["0", 1], ["-5", 1], ["9999", 5], ["3.8", 3], ["  4  ", 4]];
+    for (const [raw, expect] of cases) {
+      await gotoPage(1);
+      startEdit(inp); inp.value = raw; navCount = 0;
+      doBlur(inp);
+      await sleep(150);
+      assert(state_page() === expect, `"${raw}" -> expected ${expect}, got ${state_page()}`);
+      assertTriple(expect, `p19:"${raw}"`);
+    }
+    sc.scrollTo = _origScrollTo; // unhook
     W.__viewer.exit();
     await sleep(100);
   });
