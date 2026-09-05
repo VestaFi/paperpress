@@ -796,7 +796,15 @@ main {
 .pv-result mark { background: #ffdf6b; color: var(--ink); }
 .pv-result-pg { color: var(--press-blue); font-weight: 600; margin-right: 4px; }
 
-.pv-scroll { flex: 1; overflow: auto; }
+.pv-scroll {
+  flex: 1;
+  overflow: auto;
+  /* Positioned so page shells' offsetTop is measured in this scroll
+     container's frame. Without it their offsetParent is the fixed .pv section,
+     whose toolbar height then offsets every scrollToPage target and clips the
+     page top in Fit Page. No z-index: this must not create a stacking level. */
+  position: relative;
+}
 .pv-pages {
   display: flex;
   flex-direction: column;
