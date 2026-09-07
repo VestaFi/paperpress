@@ -19,7 +19,17 @@
     observer: null,
     thumbObserver: null,
     rendering: new Set(),
+    queue: [],          // reader document queue: [{ id, file, name }] — in-memory only
+    opening: false,     // a document switch is in progress (UI interaction lock)
   };
+
+  // Monotonic token: every open() captures its value; only the newest may commit.
+  // Guards viewer state even if overlapping open() calls slip past the UI lock.
+  let openGeneration = 0;
+
+  async function destroyDoc(doc) {
+    try { await doc?.destroy(); } catch { /* already gone */ }
+  }
 
   const viewEl = () => $("#view-viewer");
   const pagesEl = () => $("#pv-pages");
@@ -39,21 +49,39 @@
 
   // ---------- open / close ----------
 
+  // Returns an explicit result: "success" | "superseded".
+  // Throws only on a genuine parse failure for the *current* generation. A stale
+  // (superseded) call never throws, never touches active state, and destroys its
+  // own candidate document. All candidate parsing/measuring happens on a local
+  // `doc` — the previous document is torn down only inside the synchronous commit
+  // block, so exactly the newest generation ever mutates viewer state.
   async function open(file) {
-    closeDoc();
+    const gen = ++openGeneration;
+    let doc, vp;
+    try {
+      const buf = await file.arrayBuffer();
+      if (gen !== openGeneration) return "superseded";        // stale before parse
+      doc = await pdfjsLib.getDocument({ data: buf }).promise;
+      if (gen !== openGeneration) { await destroyDoc(doc); return "superseded"; }
+      const p1 = await doc.getPage(1);                        // measure the candidate, not state.doc
+      vp = p1.getViewport({ scale: 1 });
+    } catch (err) {
+      if (gen !== openGeneration) { await destroyDoc(doc); return "superseded"; }
+      throw err;                                              // real parse failure, current generation
+    }
+    if (gen !== openGeneration) { await destroyDoc(doc); return "superseded"; }
+
+    // ---- commit (synchronous: nothing may interleave until state is consistent) ----
+    closeDoc();                         // destroy the previous active document exactly once
     state.file = file;
-    const buf = await file.arrayBuffer();
-    state.doc = await pdfjsLib.getDocument({ data: buf }).promise;
-    state.pageCount = state.doc.numPages;
+    state.doc = doc;
+    state.pageCount = doc.numPages;
     state.currentPage = 1;
     state.rotation = 0;
     state.zoomMode = "fit-width";
     state.textCache = null;
     state.matches = [];
     state.matchIdx = -1;
-
-    const p1 = await state.doc.getPage(1);
-    const vp = p1.getViewport({ scale: 1 });
     state.baseDims = { w: vp.width, h: vp.height };
     state.pageDims = new Array(state.pageCount).fill(null);
     state.pageDims[0] = { w: vp.width, h: vp.height };
@@ -75,14 +103,14 @@
     buildOutline();
     updateZoomLabel();
     scrollEl().scrollTop = 0;
-    // Thumbnails now exist — apply page-1 state (field + highlight + aria)
-    // through the single owner.
-    synchroniseCurrentPage(1);
+    synchroniseCurrentPage(1); // page-1 field + highlight + aria via the single owner
+    return "success";
   }
 
   function closeDoc() {
     state.observer?.disconnect();
     state.thumbObserver?.disconnect();
+    state.rendering.clear();   // drop in-flight render bookkeeping so a stale page render can't block the new document
     state.doc?.destroy();
     state.doc = null;
     pagesEl().innerHTML = "";
@@ -521,9 +549,14 @@
 
     $("#pv-open").addEventListener("click", () => $("#pv-file").click());
     $("#pv-file").addEventListener("change", (e) => {
-      const f = e.target.files[0];
-      if (f) open(f).catch((err) => alert("Couldn't open PDF: " + err.message));
-      e.target.value = "";
+      enqueueForReading(e.target.files); // single or multiple -> shared reading intake
+      e.target.value = "";               // reset so re-picking the same file fires change again
+    });
+
+    // Queue toolbar button + panel
+    $("#pv-queue-btn").addEventListener("click", () => (queueOpen ? closeQueuePanel(true) : openQueuePanel()));
+    $("#pv-queue-panel").addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.preventDefault(); closeQueuePanel(true); }
     });
 
     // Page-number field: a text input (type=number exposes no selection API in
@@ -654,40 +687,255 @@
       }
     });
 
-    // Reader card on home
+    // Reader card on home — same multi-file picker as Open
     $("#reader-open").addEventListener("click", () => $("#pv-file").click());
 
-    // OS file handler: PDFs open in the reader by default, images go to the images tool
+    // Home drag-and-drop: PDF-only reading intake. Only active on the home view,
+    // never over the reader or a specialist-tool view, and never touches the
+    // existing per-tool dropzone or image-tool intake.
+    const home = $("#view-home");
+    if (home) {
+      const homeActive = () => !home.hidden;
+      const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes("Files");
+      let dragDepth = 0;
+      const clearDrag = () => { dragDepth = 0; home.classList.remove("drag-over"); };
+      home.addEventListener("dragenter", (e) => {
+        if (!homeActive() || !hasFiles(e)) return;
+        e.preventDefault(); dragDepth++; home.classList.add("drag-over");
+      });
+      home.addEventListener("dragover", (e) => {
+        if (!homeActive() || !hasFiles(e)) return;
+        e.preventDefault(); e.dataTransfer.dropEffect = "copy"; // stop the browser opening the file
+      });
+      home.addEventListener("dragleave", () => {
+        if (!homeActive()) return;
+        if (--dragDepth <= 0) clearDrag();
+      });
+      home.addEventListener("drop", (e) => {
+        if (!homeActive()) return;
+        e.preventDefault(); clearDrag();
+        enqueueForReading(e.dataTransfer?.files);
+      });
+    }
+
+    // OS/PWA file handler: first PDF opens in the reader, the rest enter the
+    // reader queue (never the tools stash). Images still go to the images tool.
     if ("launchQueue" in window) {
       window.launchQueue.setConsumer(async (params) => {
         if (!params.files?.length) return;
         let files;
         try { files = await Promise.all(params.files.map((h) => h.getFile())); }
         catch (e) { console.warn("Launch files unavailable:", e.message); return; }
-        const pdfs = files.filter((f) => /\.pdf$/i.test(f.name));
+        const { pdfs } = classifyPdfs(files);
         const imgs = files.filter((f) => /\.(jpe?g|png)$/i.test(f.name));
-        if (pdfs.length) {
-          open(pdfs[0]).catch((err) => alert("Couldn't open PDF: " + err.message));
-          if (pdfs.length > 1) stashExtraPdfs(pdfs[0].name, pdfs.slice(1));
-        } else if (imgs.length) {
-          window.__pp?.stashLaunchFiles(imgs, "images");
-        }
+        if (pdfs.length) enqueueForReading(pdfs);
+        else if (imgs.length) window.__pp?.stashLaunchFiles(imgs, "images");
       });
     }
   }
 
-  // Multi-PDF launch (no tabs): first file opens in the reader, the rest wait
-  // in the tools stash. The home banner says so honestly.
-  function stashExtraPdfs(openedName, extras) {
-    window.__pp?.stashLaunchFiles(extras);
-    const note = document.querySelector("#launch-note");
-    if (note) {
-      const n = extras.length;
-      note.textContent = `→ Opened "${openedName}" in the reader. ${n} more PDF${n === 1 ? "" : "s"} waiting below — pick a tool and ${n === 1 ? "it'll" : "they'll"} be loaded in.`;
-      note.hidden = false;
+  // ---------- reader document queue (in-memory, no persistence) ----------
+  //
+  // A queued entry holds only { id, File, name }. Nothing is parsed, rendered
+  // or indexed until it is opened. Queue data is interface state: it never
+  // touches document/dirty state, never persists (no localStorage/session/IDB),
+  // never leaves the device, and is deliberately NOT in any AI scope — a future
+  // AI feature must opt a document in explicitly, not read state.queue.
+
+  let queueSeq = 0;              // stable ids, independent of filename
+  let queueOpen = false;
+
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+  // Accept by MIME when present, else a conservative .pdf filename fallback.
+  // Filename is only a routing hint — the real open() path reports parse errors.
+  const isPdf = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name || "");
+
+  function classifyPdfs(fileLike) {
+    const pdfs = [], unsupported = [];
+    for (const f of (fileLike ? Array.from(fileLike) : [])) (isPdf(f) ? pdfs : unsupported).push(f);
+    return { pdfs, unsupported };
+  }
+
+  // Transient local message: reader status while reading, home banner otherwise.
+  function announce(msg) {
+    if (!viewEl().hidden) {
+      const s = $("#pv-status");
+      if (s) { s.textContent = msg; if (msg) setTimeout(() => { if (s.textContent === msg) s.textContent = ""; }, 4000); }
+    } else {
+      const note = $("#launch-note");
+      if (note) { note.textContent = msg; note.hidden = !msg; }
     }
   }
 
+  // The single reading-intake path — home drop, hero/Open picker, OS launchQueue.
+  // Opens the first PDF only when nothing is active; otherwise appends every
+  // accepted PDF to the queue. Accepted reading PDFs are never sent to the
+  // specialist-tools stash. Input order preserved; source collection not mutated.
+  function enqueueForReading(fileLike) {
+    const { pdfs, unsupported } = classifyPdfs(fileLike);
+    if (!pdfs.length) {
+      announce(unsupported.length ? "That isn't a PDF — nothing was added." : "");
+      return;
+    }
+    const active = !viewEl().hidden && !!state.file;
+    // If a document is active OR a switch/initial-open is already pending, every
+    // accepted PDF is simply queued — we never start a second competing open.
+    if (active || state.opening) {
+      pdfs.forEach((f) => state.queue.push({ id: ++queueSeq, file: f, name: f.name }));
+      renderQueue();
+    } else {
+      const [first, ...rest] = pdfs;
+      rest.forEach((f) => state.queue.push({ id: ++queueSeq, file: f, name: f.name }));
+      state.opening = true;
+      renderQueue();                       // reflect busy state immediately
+      open(first)
+        .catch((err) => announce("Couldn't open “" + first.name + "”. " + err.message)) // failure: rest stay queued
+        .finally(() => { state.opening = false; renderQueue(); });
+    }
+    if (unsupported.length) {
+      announce(`Skipped ${unsupported.length} non-PDF file${unsupported.length === 1 ? "" : "s"}.`);
+    }
+  }
+
+  function mkQueueBtn(label, title, fn) {
+    const b = document.createElement("button");
+    b.className = "pv-qbtn";
+    b.textContent = label;
+    b.title = title; b.setAttribute("aria-label", title);
+    b.addEventListener("click", fn);
+    return b;
+  }
+
+  // focusHint: { id, action } re-focuses that row's control after a re-render.
+  function renderQueue(focusHint) {
+    const n = state.queue.length;
+    const busy = state.opening; // a switch/open is pending: lock all queue mutation controls
+    const btn = $("#pv-queue-btn"), count = $("#pv-queue-count"), list = $("#pv-queue-list"), panel = $("#pv-queue-panel");
+    if (count) count.textContent = String(n);
+    if (btn) btn.disabled = n === 0 && !busy;      // keep the panel reachable while busy shows progress
+    if (panel) panel.setAttribute("aria-busy", busy ? "true" : "false");
+    if (n === 0 && queueOpen && !busy) { closeQueuePanel(false); }
+    if (!list) return;
+    list.innerHTML = "";
+    state.queue.forEach((item, i) => {
+      const row = document.createElement("li");
+      row.className = "pv-queue-row" + (busy ? " busy" : "");
+      row.dataset.id = String(item.id);
+      const name = document.createElement("span");
+      name.className = "pv-queue-name";
+      name.textContent = item.name; name.title = item.name;
+      const openB = mkQueueBtn("Open", "Open in the reader", () => openFromQueue(item.id));
+      openB.classList.add("pv-qbtn-open"); openB.dataset.action = "open";
+      const up = mkQueueBtn("↑", "Move up", () => moveInQueue(item.id, -1)); up.dataset.action = "up";
+      const down = mkQueueBtn("↓", "Move down", () => moveInQueue(item.id, +1)); down.dataset.action = "down";
+      const rm = mkQueueBtn("✕", "Remove from queue", () => removeFromQueue(item.id)); rm.dataset.action = "remove";
+      // While switching, every mutation control is disabled (lock); otherwise
+      // only the boundary move buttons are.
+      openB.disabled = busy;
+      up.disabled = busy || i === 0;
+      down.disabled = busy || i === state.queue.length - 1;
+      rm.disabled = busy;
+      row.append(name, openB, up, down, rm);
+      list.append(row);
+    });
+    if (focusHint) {
+      const row = list.querySelector(`.pv-queue-row[data-id="${focusHint.id}"]`);
+      let target = row && row.querySelector(`[data-action="${focusHint.action}"]:not(:disabled)`);
+      if (!target) target = list.querySelector('[data-action="open"]') || btn;
+      target && target.focus();
+    }
+  }
+
+  // Atomic rotating swap. The interaction lock rejects a second concurrent
+  // switch (double-click / two rows); the generation token inside open() is the
+  // deeper guard. Nothing in the queue is removed or replaced until open()
+  // reports "success", and the item is re-resolved by stable id AFTER the await
+  // (never via an index captured before it).
+  async function openFromQueue(id) {
+    if (state.opening) return "busy";                 // a switch is already pending
+    const exists = state.queue.some((q) => q.id === id);
+    if (!exists) return "gone";
+    const prev = state.file;
+    const prevName = prev ? prev.name : null;
+    state.opening = true;
+    renderQueue();                                    // lock controls + aria-busy
+    let result = "failed";
+    try {
+      const item = state.queue.find((q) => q.id === id);
+      result = await open(item.file);                 // "success" | "superseded" | (throws on real failure)
+      if (result === "success") {
+        const idx = state.queue.findIndex((q) => q.id === id); // re-resolve post-await
+        if (idx !== -1) {
+          state.queue.splice(idx, 1);                 // remove the now-active item
+          if (prev) state.queue.splice(idx, 0, { id: ++queueSeq, file: prev, name: prevName }); // prev into vacated slot
+        }
+      }
+      // "superseded" -> no queue mutation at all
+    } catch (err) {
+      announce("Couldn't open “" + (state.queue.find((q) => q.id === id)?.name || "document") + "”. " + err.message);
+      result = "failed";
+    } finally {
+      state.opening = false;                          // clear the lock (this op owns it)
+      renderQueue();                                  // re-enable controls, aria-busy false
+    }
+    if (result === "success") closeQueuePanel(true);  // otherwise keep the panel open for retry
+    return result;
+  }
+
+  function removeFromQueue(id) {
+    if (state.opening) return;                          // locked during a switch
+    const idx = state.queue.findIndex((q) => q.id === id);
+    if (idx === -1) return;
+    state.queue.splice(idx, 1); // drops the in-memory reference only; source file untouched
+    // keep focus predictable: the row that shifted into this slot, else the button
+    const nextId = state.queue[idx]?.id ?? state.queue[idx - 1]?.id;
+    renderQueue(nextId != null ? { id: nextId, action: "open" } : undefined);
+    if (state.queue.length === 0) $("#pv-queue-btn").focus();
+  }
+
+  function moveInQueue(id, delta) {
+    if (state.opening) return;                          // locked during a switch
+    const idx = state.queue.findIndex((q) => q.id === id);
+    const to = idx + delta;
+    if (idx === -1 || to < 0 || to >= state.queue.length) return;
+    const [item] = state.queue.splice(idx, 1);
+    state.queue.splice(to, 0, item);
+    renderQueue({ id, action: delta < 0 ? "up" : "down" });
+  }
+
+  // ---------- queue panel open/close ----------
+
+  function openQueuePanel() {
+    if ($("#pv-queue-btn").disabled) return;
+    queueOpen = true;
+    const p = $("#pv-queue-panel");
+    p.hidden = false; p.inert = false;
+    $("#pv-queue-btn").setAttribute("aria-expanded", "true");
+    const first = p.querySelector("button:not(:disabled)") || $("#pv-queue-btn");
+    first.focus();
+    document.addEventListener("pointerdown", onQueueOutside, true);
+  }
+  function closeQueuePanel(refocus) {
+    if (!queueOpen) { if (refocus) $("#pv-queue-btn").focus(); return; }
+    queueOpen = false;
+    const p = $("#pv-queue-panel");
+    p.hidden = true; p.inert = true;
+    $("#pv-queue-btn").setAttribute("aria-expanded", "false");
+    document.removeEventListener("pointerdown", onQueueOutside, true);
+    if (refocus) $("#pv-queue-btn").focus();
+  }
+  function onQueueOutside(e) {
+    const p = $("#pv-queue-panel"), b = $("#pv-queue-btn");
+    if (!p.contains(e.target) && e.target !== b) closeQueuePanel(false);
+  }
+
   wire();
-  window.__viewer = { open, exit, stashExtraPdfs };
+  window.__viewer = {
+    open, exit, enqueueForReading, openFromQueue, removeFromQueue, moveInQueue,
+    _queue: () => state.queue,           // test-only inspection (references, not bytes)
+    _reset: () => { state.queue.splice(0); renderQueue(); }, // test-only: clear + re-render
+    _activeFile: () => state.file, _activeDoc: () => state.doc, // test-only inspection
+    _openPanel: openQueuePanel, _closePanel: closeQueuePanel,
+  };
 })();

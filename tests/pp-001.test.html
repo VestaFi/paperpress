@@ -243,19 +243,24 @@ normal behaviour and does not affect these assertions.</p>
     assert($("#reader-open"), "reader hero missing");
   });
 
-  // l. extra file-handler PDFs stash to tools with the revised note
-  await check("l. Extra launch PDFs stash to tools with honest note", async () => {
-    W.__viewer.stashExtraPdfs("fixture-a.pdf", [fixtureB]);
-    const note = $("#launch-note");
-    assert(!note.hidden, "note hidden");
-    assert(note.textContent.includes("fixture-a.pdf"), "note missing opened filename");
-    assert(note.textContent.includes("1 more PDF"), "note missing waiting count: " + note.textContent);
-    // and the stash actually loads into a tool
+  // l. (replaced) reading intake now routes extra PDFs to the reader queue, not
+  // the tools stash — the old stash-to-tools behaviour is deliberately gone.
+  await check("l. Extra reading PDFs go to the reader queue, not the tools stash", async () => {
+    W.__viewer.exit(); await sleep(80);           // start from home so the first PDF opens
+    W.__viewer._reset();                 // clear any residue
+    W.__viewer.enqueueForReading([fixtureA, fixtureB]);
+    await sleep(500);
+    assert($("#pv-title").textContent === "fixture-a.pdf", "first PDF not opened in reader");
+    const q = W.__viewer._queue();
+    assert(q.length === 1 && q[0].name === "fixture-b.pdf", "extra PDF not queued: " + JSON.stringify(q.map(x => x.name)));
+    // and it did NOT land in the tools stash: leaving the reader for a tool shows no preloaded file
     W.__viewer.exit();
     await sleep(100);
     D.querySelector('[data-tool="extract"]').click();
-    await sleep(400);
-    assert(D.querySelectorAll("#file-list .file-item").length === 1, "stashed file not loaded into tool");
+    await sleep(300);
+    assert(D.querySelectorAll("#file-list .file-item").length === 0, "reading PDF leaked into the tools stash");
+    D.querySelector("#back-btn").click();
+    await sleep(100);
   });
 
   // ---- colophon-overlay fix regressions (fix/reader-colophon-overlay) ----
@@ -718,6 +723,559 @@ normal behaviour and does not affect these assertions.</p>
     sc.scrollTo = _origScrollTo; // unhook
     W.__viewer.exit();
     await sleep(100);
+  });
+
+  // ================= reader document queue (feature/reader-document-queue) =================
+  // Runtime fixtures only; DragEvent limitation stated where relevant. The queue
+  // holds File references — _queue() exposes them for inspection (never bytes).
+  const mkNamed = async (pages, name) => {
+    const { PDFDocument } = W.PDFLib;
+    const d = await PDFDocument.create();
+    for (let i = 0; i < pages; i++) d.addPage();
+    return new W.File([await d.save()], name, { type: "application/pdf" });
+  };
+  const qnames = () => W.__viewer._queue().map((x) => x.name);
+  const qids = () => W.__viewer._queue().map((x) => x.id);
+  const title = () => $("#pv-title").textContent;
+  const freshReader = async (name = "seed.pdf") => { // start with one active doc, empty queue
+    W.__viewer.exit(); await sleep(60);
+    await W.__viewer.open(await mkNamed(2, name)); await sleep(300);
+    W.__viewer._reset(); // clear any residue from a prior test
+    if (typeof W.__viewer._closePanel === "function") W.__viewer._closePanel(false);
+  };
+
+  await check("q1. Single-PDF picker opens it, queue empty", async () => {
+    W.__viewer.exit(); await sleep(60); W.__viewer._reset();
+    W.__viewer.enqueueForReading([await mkNamed(3, "one.pdf")]); await sleep(400);
+    assert(title() === "one.pdf" && qnames().length === 0, "queue not empty: " + JSON.stringify(qnames()));
+  });
+
+  await check("q2. Multi-PDF picker opens first, queues rest in order", async () => {
+    W.__viewer.exit(); await sleep(60); W.__viewer._reset();
+    W.__viewer.enqueueForReading([await mkNamed(1,"a.pdf"), await mkNamed(1,"b.pdf"), await mkNamed(1,"c.pdf")]);
+    await sleep(400);
+    assert(title() === "a.pdf", "wrong active: " + title());
+    assert(JSON.stringify(qnames()) === JSON.stringify(["b.pdf","c.pdf"]), "queue order: " + JSON.stringify(qnames()));
+  });
+
+  // q3/q4: home DROP path. Synthetic DragEvent with a DataTransfer carrying files
+  // is unreliable across engines, so these drive the same handler via a real
+  // 'drop' event whose dataTransfer we attach; the intake function is identical
+  // to q1/q2. Real pointer drag is on the manual checklist.
+  await check("q3+q4. Home drop opens first, queues the rest", async () => {
+    W.__viewer.exit(); await sleep(80); W.__viewer._reset();
+    const files = [await mkNamed(1,"d1.pdf"), await mkNamed(1,"d2.pdf"), await mkNamed(1,"d3.pdf")];
+    const dt = new W.DataTransfer();
+    files.forEach((f) => dt.items.add(f));
+    const ev = new W.DragEvent("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, "dataTransfer", { value: dt });
+    D.querySelector("#view-home").dispatchEvent(ev);
+    await sleep(500);
+    assert(title() === "d1.pdf", "drop did not open first: " + title());
+    assert(JSON.stringify(qnames()) === JSON.stringify(["d2.pdf","d3.pdf"]), "drop queue: " + JSON.stringify(qnames()));
+  });
+
+  await check("q5. OS launch equivalent: first opens, rest queue (shared intake)", async () => {
+    W.__viewer.exit(); await sleep(60); W.__viewer._reset();
+    // launchQueue consumer routes PDFs through enqueueForReading — exercised directly
+    W.__viewer.enqueueForReading([await mkNamed(1,"l1.pdf"), await mkNamed(1,"l2.pdf")]);
+    await sleep(400);
+    assert(title() === "l1.pdf" && JSON.stringify(qnames()) === JSON.stringify(["l2.pdf"]), "launch intake wrong");
+  });
+
+  await check("q6. Extra reading PDFs never reach the tools stash", async () => {
+    W.__viewer.exit(); await sleep(60); W.__viewer._reset();
+    W.__viewer.enqueueForReading([await mkNamed(1,"s1.pdf"), await mkNamed(1,"s2.pdf")]); await sleep(400);
+    W.__viewer.exit(); await sleep(80);
+    D.querySelector('[data-tool="merge"]').click(); await sleep(300);
+    assert(D.querySelectorAll("#file-list .file-item").length === 0, "reading PDF leaked to tools");
+    D.querySelector("#back-btn").click(); await sleep(80);
+  });
+
+  await check("q7. Already-active: new PDFs append, do not replace", async () => {
+    await freshReader("active.pdf");
+    W.__viewer.enqueueForReading([await mkNamed(1,"n1.pdf"), await mkNamed(1,"n2.pdf")]); await sleep(200);
+    assert(title() === "active.pdf", "active replaced: " + title());
+    assert(JSON.stringify(qnames()) === JSON.stringify(["n1.pdf","n2.pdf"]), "append order: " + JSON.stringify(qnames()));
+  });
+
+  await check("q8. Unsupported home-drop files do not enter queue or change active", async () => {
+    await freshReader("keep.pdf");
+    const png = new W.File([new Uint8Array([137,80,78,71])], "x.png", { type: "image/png" });
+    W.__viewer.enqueueForReading([png]); await sleep(150);
+    assert(title() === "keep.pdf" && qnames().length === 0, "unsupported changed state");
+  });
+
+  await check("q9. Mixed files: accepted PDFs kept in order, unsupported skipped", async () => {
+    await freshReader("mix.pdf");
+    const png = new W.File([new Uint8Array([137,80,78,71])], "y.png", { type: "image/png" });
+    W.__viewer.enqueueForReading([png, await mkNamed(1,"m1.pdf"), png, await mkNamed(1,"m2.pdf")]); await sleep(200);
+    assert(JSON.stringify(qnames()) === JSON.stringify(["m1.pdf","m2.pdf"]), "mixed order wrong: " + JSON.stringify(qnames()));
+  });
+
+  await check("q10. Re-picking after input reset is a new intake", async () => {
+    const inp = D.querySelector("#pv-file");
+    assert(inp.value === "", "file input not reset after use: " + inp.value);
+    await freshReader("again.pdf");
+    W.__viewer.enqueueForReading([await mkNamed(1,"r.pdf")]); await sleep(150);
+    assert(qnames().includes("r.pdf"), "second intake not processed");
+  });
+
+  await check("q11+q12. Count matches length; rows show names in order", async () => {
+    await freshReader("cnt.pdf");
+    W.__viewer.enqueueForReading([await mkNamed(1,"c1.pdf"), await mkNamed(1,"c2.pdf"), await mkNamed(1,"c3.pdf")]); await sleep(200);
+    assert($("#pv-queue-count").textContent === "3", "count: " + $("#pv-queue-count").textContent);
+    W.__viewer._openPanel(); await sleep(100);
+    const rows = [...D.querySelectorAll("#pv-queue-list .pv-queue-row .pv-queue-name")].map((n) => n.textContent);
+    assert(JSON.stringify(rows) === JSON.stringify(["c1.pdf","c2.pdf","c3.pdf"]), "rows: " + JSON.stringify(rows));
+    W.__viewer._closePanel(false);
+  });
+
+  await check("q13. Duplicate filenames -> separate entries, distinct ids", async () => {
+    await freshReader("dup.pdf");
+    W.__viewer.enqueueForReading([await mkNamed(1,"same.pdf"), await mkNamed(1,"same.pdf")]); await sleep(200);
+    assert(qnames().length === 2 && qnames()[0] === qnames()[1], "not two same-named entries");
+    assert(new Set(qids()).size === 2, "ids not distinct");
+  });
+
+  await check("q14. Empty queue disables the button", async () => {
+    await freshReader("empty.pdf");
+    assert(D.querySelector("#pv-queue-btn").disabled === true, "button not disabled at 0");
+    assert($("#pv-queue-count").textContent === "0", "count not 0");
+  });
+
+  await check("q15. Long filename keeps row actions reachable", async () => {
+    await freshReader("long.pdf");
+    const longName = "z".repeat(180) + ".pdf";
+    W.__viewer.enqueueForReading([await mkNamed(1, longName)]); await sleep(150);
+    W.__viewer._openPanel(); await sleep(80);
+    const row = D.querySelector("#pv-queue-list .pv-queue-row");
+    assert(row.querySelector('[data-action="open"]') && row.querySelector('[data-action="remove"]'), "actions missing");
+    W.__viewer._closePanel(false);
+  });
+
+  await check("q16. Open performs the rotating swap (no loss/dup)", async () => {
+    await freshReader("A.pdf");
+    W.__viewer.enqueueForReading([await mkNamed(1,"B.pdf"), await mkNamed(2,"C.pdf"), await mkNamed(1,"D.pdf")]); await sleep(300);
+    // active A, queue [B,C,D]; open C (index 1)
+    const cId = W.__viewer._queue().find((x) => x.name === "C.pdf").id;
+    await W.__viewer.openFromQueue(cId); await sleep(400);
+    assert(title() === "C.pdf", "C not active: " + title());
+    assert(JSON.stringify(qnames()) === JSON.stringify(["B.pdf","A.pdf","D.pdf"]), "swap order: " + JSON.stringify(qnames()));
+    assert(new Set(qids()).size === qids().length, "duplicate ids after swap");
+  });
+
+  await check("q17. Failed open restores active + queue order", async () => {
+    await freshReader("safe.pdf");
+    const bad = new W.File([new Uint8Array([1,2,3,4,5])], "bad.pdf", { type: "application/pdf" });
+    W.__viewer.enqueueForReading([bad, await mkNamed(1,"good.pdf")]); await sleep(200);
+    const before = qnames().slice();
+    const badId = W.__viewer._queue().find((x) => x.name === "bad.pdf").id;
+    await W.__viewer.openFromQueue(badId); await sleep(300);
+    assert(title() === "safe.pdf", "active changed after failed open: " + title());
+    assert(JSON.stringify(qnames()) === JSON.stringify(before), "queue order changed: " + JSON.stringify(qnames()));
+  });
+
+  await check("q18. Remove drops only the entry (source File intact)", async () => {
+    await freshReader("rem.pdf");
+    const keepFile = await mkNamed(1, "keepref.pdf");
+    W.__viewer.enqueueForReading([keepFile]); await sleep(150);
+    const id = W.__viewer._queue()[0].id;
+    const sizeBefore = keepFile.size;
+    W.__viewer.removeFromQueue(id); await sleep(80);
+    assert(qnames().length === 0, "not removed");
+    assert(keepFile.size === sizeBefore && keepFile.name === "keepref.pdf", "source File mutated");
+  });
+
+  await check("q19+q20. Move Up / Move Down reorder correctly", async () => {
+    await freshReader("mv.pdf");
+    W.__viewer.enqueueForReading([await mkNamed(1,"1.pdf"), await mkNamed(1,"2.pdf"), await mkNamed(1,"3.pdf")]); await sleep(200);
+    const q = W.__viewer._queue();
+    W.__viewer.moveInQueue(q[2].id, -1); await sleep(60); // 3 up
+    assert(JSON.stringify(qnames()) === JSON.stringify(["1.pdf","3.pdf","2.pdf"]), "up: " + JSON.stringify(qnames()));
+    W.__viewer.moveInQueue(W.__viewer._queue()[0].id, +1); await sleep(60); // 1 down
+    assert(JSON.stringify(qnames()) === JSON.stringify(["3.pdf","1.pdf","2.pdf"]), "down: " + JSON.stringify(qnames()));
+  });
+
+  await check("q21. Boundary reorder controls disabled", async () => {
+    await freshReader("bnd.pdf");
+    W.__viewer.enqueueForReading([await mkNamed(1,"p.pdf"), await mkNamed(1,"q.pdf")]); await sleep(150);
+    W.__viewer._openPanel(); await sleep(80);
+    const rows = [...D.querySelectorAll("#pv-queue-list .pv-queue-row")];
+    assert(rows[0].querySelector('[data-action="up"]').disabled, "first up not disabled");
+    assert(rows[rows.length-1].querySelector('[data-action="down"]').disabled, "last down not disabled");
+    W.__viewer._closePanel(false);
+  });
+
+  await check("q22. Count updates after open, remove, reorder", async () => {
+    await freshReader("upd.pdf");
+    W.__viewer.enqueueForReading([await mkNamed(1,"u1.pdf"), await mkNamed(1,"u2.pdf")]); await sleep(150);
+    assert($("#pv-queue-count").textContent === "2", "after append");
+    await W.__viewer.openFromQueue(W.__viewer._queue()[0].id); await sleep(300);
+    assert($("#pv-queue-count").textContent === "2", "after open (rotating keeps count)"); // u1 out, upd.pdf in
+    W.__viewer.removeFromQueue(W.__viewer._queue()[0].id); await sleep(80);
+    assert($("#pv-queue-count").textContent === "1", "after remove");
+  });
+
+  await check("q23. Queue button exposes aria-expanded / aria-controls", async () => {
+    await freshReader("aria.pdf");
+    W.__viewer.enqueueForReading([await mkNamed(1,"z.pdf")]); await sleep(150);
+    const btn = D.querySelector("#pv-queue-btn");
+    assert(btn.getAttribute("aria-controls") === "pv-queue-panel", "aria-controls");
+    assert(btn.getAttribute("aria-expanded") === "false", "expanded not false when closed");
+    W.__viewer._openPanel(); await sleep(80);
+    assert(btn.getAttribute("aria-expanded") === "true", "expanded not true when open");
+    W.__viewer._closePanel(false);
+    assert(btn.getAttribute("aria-expanded") === "false", "expanded not reset");
+  });
+
+  await check("q24. Escape closes panel and returns focus to the button", async () => {
+    await freshReader("esc.pdf");
+    W.__viewer.enqueueForReading([await mkNamed(1,"e.pdf")]); await sleep(150);
+    W.__viewer._openPanel(); await sleep(80);
+    D.querySelector("#pv-queue-panel").dispatchEvent(new W.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await sleep(80);
+    assert(D.querySelector("#pv-queue-panel").hidden, "panel not closed by Escape");
+    assert(D.activeElement === D.querySelector("#pv-queue-btn"), "focus not returned to button");
+  });
+
+  await check("q25+q26. Panel controls keyboard-operable open; unreachable when closed (inert)", async () => {
+    await freshReader("kbd.pdf");
+    W.__viewer.enqueueForReading([await mkNamed(1,"k.pdf")]); await sleep(150);
+    const panel = D.querySelector("#pv-queue-panel");
+    W.__viewer._openPanel(); await sleep(80);
+    assert(panel.inert === false, "panel inert while open");
+    const openBtn = panel.querySelector('[data-action="open"]');
+    openBtn.focus();
+    assert(D.activeElement === openBtn, "action not focusable when open");
+    W.__viewer._closePanel(false); await sleep(60);
+    assert(panel.inert === true, "panel not inert when closed");
+  });
+
+  await check("q27. Focus stays valid after remove", async () => {
+    await freshReader("foc.pdf");
+    W.__viewer.enqueueForReading([await mkNamed(1,"f1.pdf"), await mkNamed(1,"f2.pdf")]); await sleep(150);
+    W.__viewer._openPanel(); await sleep(80);
+    W.__viewer.removeFromQueue(W.__viewer._queue()[0].id); await sleep(80);
+    const ae = D.activeElement;
+    assert(ae && (ae.id === "pv-queue-btn" || ae.closest("#pv-queue-panel")), "focus lost after remove: " + (ae && ae.id));
+    W.__viewer._closePanel(false);
+  });
+
+  await check("q28. Queue activity does not touch the sidebar", async () => {
+    await freshReader("sb.pdf");
+    const sb = D.querySelector("#pv-sidebar");
+    const before = [sb.classList.contains("open"), sb.inert];
+    W.__viewer.enqueueForReading([await mkNamed(1,"s.pdf")]); await sleep(120);
+    W.__viewer._openPanel(); await sleep(60); W.__viewer._closePanel(false); await sleep(60);
+    assert(sb.classList.contains("open") === before[0] && sb.inert === before[1], "sidebar state changed");
+  });
+
+  await check("q29. Queued PDFs are not parsed before opening", async () => {
+    await freshReader("np.pdf");
+    let read = 0;
+    const f = await mkNamed(1, "watch.pdf");
+    const orig = f.arrayBuffer.bind(f);
+    f.arrayBuffer = (...a) => { read++; return orig(...a); };
+    W.__viewer.enqueueForReading([f]); await sleep(200);
+    assert(read === 0, "queued file was read before opening (" + read + ")");
+  });
+
+  await check("q30. No queue action creates dirty state / changes active bytes", async () => {
+    await freshReader("dirty.pdf");
+    const activeName = title();
+    W.__viewer.enqueueForReading([await mkNamed(1,"g1.pdf"), await mkNamed(1,"g2.pdf")]); await sleep(150);
+    W.__viewer.moveInQueue(W.__viewer._queue()[0].id, +1); await sleep(50);
+    W.__viewer.removeFromQueue(W.__viewer._queue()[0].id); await sleep(50);
+    assert(title() === activeName, "active document changed by queue actions");
+  });
+
+  await check("q31. Queue uses no localStorage/sessionStorage/IndexedDB", async () => {
+    await freshReader("store.pdf");
+    const ls = W.localStorage.length, ss = W.sessionStorage.length;
+    W.__viewer.enqueueForReading([await mkNamed(1,"st.pdf")]); await sleep(120);
+    assert(W.localStorage.length === ls && W.sessionStorage.length === ss, "queue wrote to web storage");
+  });
+
+  await check("q32. No external request from intake or switching", async () => {
+    await freshReader("net.pdf");
+    const calls = [];
+    const of = W.fetch; W.fetch = (...a) => { calls.push(String(a[0])); return of(...a); };
+    try {
+      W.__viewer.enqueueForReading([await mkNamed(1,"h1.pdf"), await mkNamed(1,"h2.pdf")]); await sleep(200);
+      await W.__viewer.openFromQueue(W.__viewer._queue()[0].id); await sleep(300);
+    } finally { W.fetch = of; }
+    const external = calls.filter((u) => /^https?:\/\//i.test(u) && !u.startsWith(W.location.origin));
+    assert(external.length === 0, "external request made: " + JSON.stringify(external));
+  });
+
+  await check("q33. Single-PDF open still works via the shared route", async () => {
+    W.__viewer.exit(); await sleep(60); W.__viewer._reset();
+    W.__viewer.enqueueForReading([await mkNamed(4, "solo.pdf")]); await sleep(400);
+    assert(title() === "solo.pdf" && !$("#view-viewer").hidden && qnames().length === 0, "single open regressed");
+  });
+
+  await check("q34+q35. Tool dropzone + image intake unchanged", async () => {
+    W.__viewer.exit(); await sleep(80);
+    assert(D.querySelectorAll(".tool-card").length === 17, "tool cards changed");
+    D.querySelector('[data-tool="images"]').click(); await sleep(200);
+    assert(D.querySelector("#dropzone"), "tool dropzone missing");
+    assert(D.querySelector("#file-input").accept.includes("image"), "image intake accept changed");
+    D.querySelector("#back-btn").click(); await sleep(80);
+  });
+
+  await check("q36. Navigation-state sync holds after switching documents", async () => {
+    await freshReader("nav1.pdf");
+    W.__viewer.enqueueForReading([await mkNamed(5, "nav2.pdf")]); await sleep(300);
+    await W.__viewer.openFromQueue(W.__viewer._queue()[0].id); await sleep(400);
+    D.querySelector("#pv-sidebar-toggle").click(); await sleep(200);
+    D.querySelector("#pv-next").click(); await sleep(300);
+    const cur = D.querySelectorAll('#pv-thumbs .pv-thumb.current');
+    assert($("#pv-pageno").value === "2" && cur.length === 1 && cur[0].dataset.page === "2", "nav sync broke after switch");
+    D.querySelector("#pv-sidebar-toggle").click(); await sleep(150);
+  });
+
+  await check("q37. Fit Page / Fit Width work after switching documents", async () => {
+    await freshReader("fp1.pdf");
+    W.__viewer.enqueueForReading([await mkNamed(3, "fp2.pdf")]); await sleep(300);
+    await W.__viewer.openFromQueue(W.__viewer._queue()[0].id); await sleep(400);
+    await setZoom("fit-page"); await gotoPage(2);
+    assertFullyVisible(2, "post-switch fit-page");
+    await setZoom("fit-width");
+    assert($("#pv-zoom-sel").value === "fit-width", "fit-width not set");
+  });
+
+  await check("q38. Page-chrome stays hidden while reading, restores on exit", async () => {
+    await freshReader("chrome.pdf");
+    assert(D.querySelector(".masthead").hidden && D.querySelector(".colophon").hidden, "chrome visible while reading");
+    W.__viewer.exit(); await sleep(100);
+    assert(!D.querySelector(".masthead").hidden && !D.querySelector(".colophon").hidden, "chrome not restored on exit");
+  });
+
+  // ================= concurrent-open safety (lock + generation token) =================
+  // Deterministic ordering via a getDocument gate-spy (holds parse completion,
+  // counts destroy() per document) — no reliance on sleep timing. Spies are
+  // always removed in a finally so none survive a test.
+  const activeFile = () => W.__viewer._activeFile ? W.__viewer._activeFile() : null;
+  const invariantsOk = (expectedNames) => {
+    const q = W.__viewer._queue();
+    const names = q.map((x) => x.name);
+    const ids = q.map((x) => x.id);
+    const act = title();
+    const all = [act, ...names].sort();
+    return {
+      activeNotInQueue: !names.includes(act),
+      idsUnique: new Set(ids).size === ids.length,
+      countOk: $("#pv-queue-count").textContent === String(q.length),
+      setOk: JSON.stringify(all) === JSON.stringify(expectedNames.slice().sort()),
+      controlsEnabled: [...D.querySelectorAll("#pv-queue-list .pv-qbtn")].every((b) => b.dataset.action === "up" || b.dataset.action === "down" || !b.disabled),
+      ariaBusyFalse: $("#pv-queue-panel").getAttribute("aria-busy") === "false",
+    };
+  };
+
+  // pdf.js getDocument is a sealed non-configurable getter and cannot be spied,
+  // so ordering is gated through the File's own arrayBuffer() (fully ours):
+  // open() awaits file.arrayBuffer() first, so a gated candidate is suspended
+  // before its generation check. Destruction of the *previous active* document
+  // is observed by wrapping .destroy() on the real handle from _activeDoc().
+  async function gated(pages, name) {
+    const real = await mkNamed(pages, name);
+    const bytes = new Uint8Array(await real.arrayBuffer());
+    let release; const gate = new Promise((r) => { release = r; });
+    const f = new W.File([bytes], name, { type: "application/pdf" });
+    f.arrayBuffer = () => gate.then(() => bytes.slice().buffer); // held until release()
+    return { file: f, release: () => release() };
+  }
+  const countDestroy = (doc) => { const od = doc.destroy.bind(doc); doc.__dc = 0; doc.destroy = () => { doc.__dc++; return od(); }; return doc; };
+
+  const setupAQ = async (names) => { // Active names[0], queue names[1..]
+    W.__viewer.exit(); await sleep(60); W.__viewer._reset();
+    const files = []; for (const n of names) files.push(await mkNamed(2, n));
+    W.__viewer.enqueueForReading(files); await sleep(400);
+    return files;
+  };
+
+  await check("c1. Double-click queue Open commits one switch, no lost/dup files", async () => {
+    await setupAQ(["A.pdf","B.pdf","C.pdf","D.pdf"]);
+    const cId = W.__viewer._queue().find((x) => x.name === "C.pdf").id;
+    const p1 = W.__viewer.openFromQueue(cId);
+    const p2 = W.__viewer.openFromQueue(cId); // double-click, not awaited
+    const [r1, r2] = await Promise.all([p1, p2]);
+    await sleep(300);
+    assert([r1, r2].filter((r) => r === "success").length === 1, `expected one success, got ${r1}/${r2}`);
+    assert([r1, r2].includes("busy"), "second click not rejected as busy");
+    const inv = invariantsOk(["A.pdf","B.pdf","C.pdf","D.pdf"]);
+    assert(inv.setOk, "file set corrupted: " + JSON.stringify(qnames()) + " active " + title());
+    assert(inv.activeNotInQueue && inv.idsUnique && inv.countOk, "invariant broken");
+  });
+
+  await check("c2. Two different queue Opens: lock allows only one swap", async () => {
+    await setupAQ(["A.pdf","B.pdf","C.pdf","D.pdf"]);
+    const q = W.__viewer._queue();
+    const cId = q.find((x) => x.name === "C.pdf").id, dId = q.find((x) => x.name === "D.pdf").id;
+    const p1 = W.__viewer.openFromQueue(cId);
+    const p2 = W.__viewer.openFromQueue(dId); // immediately
+    const [r1, r2] = await Promise.all([p1, p2]);
+    await sleep(300);
+    assert(r1 === "success" && r2 === "busy", `results ${r1}/${r2}`);
+    assert(title() === "C.pdf", "active not C: " + title());
+    assert(invariantsOk(["A.pdf","B.pdf","C.pdf","D.pdf"]).setOk, "A,B,C,D not each present once: " + JSON.stringify(qnames()) + "/" + title());
+  });
+
+  await check("c3. Slow first candidate superseded by fast second (generation token)", async () => {
+    W.__viewer.exit(); await sleep(60); W.__viewer._reset();
+    const C = await gated(2, "slowC.pdf");
+    const Dd = await mkNamed(3, "fastD.pdf");
+    const pc = W.__viewer.open(C.file);   // gen1 — suspended at the gated arrayBuffer
+    const pd = W.__viewer.open(Dd);        // gen2 — parses + commits immediately
+    const rd = await pd;
+    const activeDoc = W.__viewer._activeDoc();
+    C.release();                           // gen1 resumes: generation check fails -> superseded
+    const rc = await pc;
+    await sleep(150);
+    assert(rd === "success", "D not success: " + rd);
+    assert(rc === "superseded", "C not superseded: " + rc);
+    assert(title() === "fastD.pdf", "active not D: " + title());
+    assert(W.__viewer._activeDoc() === activeDoc, "superseded C replaced the active document");
+    assert(W.__viewer._activeFile().name === "fastD.pdf", "active File not D");
+  });
+
+  await check("c4. Remove is rejected while a switch is pending", async () => {
+    await setupAQ(["A.pdf"]);              // active A, empty queue
+    const B = await gated(2, "B.pdf");
+    W.__viewer.enqueueForReading([B.file, await mkNamed(1, "C.pdf")]); await sleep(120);
+    const cId = W.__viewer._queue().find((x) => x.name === "C.pdf").id;
+    const p = W.__viewer.openFromQueue(W.__viewer._queue().find((x) => x.name === "B.pdf").id); // pending (gated)
+    try {
+      const before = qnames().slice();
+      W.__viewer.removeFromQueue(cId);           // must be rejected while opening
+      assert(JSON.stringify(qnames()) === JSON.stringify(before), "remove mutated queue during switch");
+    } finally { B.release(); await p; await sleep(120); } // always release so state.opening clears
+    assert(title() === "B.pdf", "B did not open after release");
+  });
+
+  await check("c5. Reorder is rejected while a switch is pending", async () => {
+    await setupAQ(["A.pdf"]);
+    const B = await gated(2, "B.pdf");
+    W.__viewer.enqueueForReading([B.file, await mkNamed(1, "C.pdf")]); await sleep(120);
+    const cId = W.__viewer._queue().find((x) => x.name === "C.pdf").id;
+    const p = W.__viewer.openFromQueue(W.__viewer._queue().find((x) => x.name === "B.pdf").id);
+    try {
+      const before = qnames().slice();
+      W.__viewer.moveInQueue(cId, -1);           // must be rejected (no stale index mutation)
+      assert(JSON.stringify(qnames()) === JSON.stringify(before), "reorder mutated queue during switch");
+    } finally { B.release(); await p; await sleep(120); }
+  });
+
+  await check("c6. Failed queued open leaves active + queue untouched, controls restored", async () => {
+    W.__viewer.exit(); await sleep(60); W.__viewer._reset();
+    await W.__viewer.open(await mkNamed(2, "A.pdf")); await sleep(200);
+    const bad = new W.File([new Uint8Array([1,2,3,4,5])], "bad.pdf", { type: "application/pdf" });
+    W.__viewer.enqueueForReading([await mkNamed(1,"B.pdf"), bad, await mkNamed(1,"C.pdf")]); await sleep(200);
+    const idsBefore = W.__viewer._queue().map((x) => x.id).join(",");
+    const namesBefore = qnames().join(",");
+    const badId = W.__viewer._queue().find((x) => x.name === "bad.pdf").id;
+    const r = await W.__viewer.openFromQueue(badId); await sleep(200);
+    assert(r === "failed", "expected failed, got " + r);
+    assert(title() === "A.pdf", "active changed after failed open");
+    assert(qnames().join(",") === namesBefore && W.__viewer._queue().map((x) => x.id).join(",") === idsBefore, "queue order/ids changed");
+    assert($("#pv-queue-panel").getAttribute("aria-busy") === "false", "aria-busy stuck true");
+    assert([...D.querySelectorAll('#pv-queue-list [data-action="open"]')].every((b) => !b.disabled), "controls not restored");
+    assert($("#pv-queue-count").textContent === "3", "queue count wrong: " + $("#pv-queue-count").textContent);
+  });
+
+  await check("c7. Intake during a pending open queues safely, starts no second open", async () => {
+    W.__viewer.exit(); await sleep(60); W.__viewer._reset();
+    const A = await gated(2, "A.pdf");
+    W.__viewer.enqueueForReading([A.file]);        // initial open via intake -> state.opening true (gated)
+    await sleep(60);
+    try {
+      W.__viewer.enqueueForReading([await mkNamed(1, "X.pdf"), await mkNamed(1, "Y.pdf")]); // during pending
+      // The pending open has not committed, so the viewer is still hidden and no
+      // second open started (that would have committed a document and shown it).
+      assert($("#view-viewer").hidden === true, "a document committed during the pending open");
+      assert(qnames().join(",") === "X.pdf,Y.pdf", "intake not queued in order: " + JSON.stringify(qnames()));
+    } finally { A.release(); await sleep(250); } // release so the initial open completes and the lock clears
+    assert(title() === "A.pdf", "initial open did not commit A: " + title());
+    assert(qnames().join(",") === "X.pdf,Y.pdf", "queued PDFs lost after initial open");
+  });
+
+  // NOTE (stated limitation): getDocument is a sealed getter, so a candidate
+  // cannot be gated *between* parse and commit — supersession here occurs at the
+  // pre-parse generation check. We therefore verify the safety guarantee that
+  // matters: a superseded candidate never becomes active and never replaces
+  // state.doc. Destruction-count of the *previous active* document is observed
+  // directly in c9 on its real handle.
+  await check("c8. Superseded candidate never becomes active / never replaces state.doc", async () => {
+    W.__viewer.exit(); await sleep(60); W.__viewer._reset();
+    const S = await gated(2, "stale.pdf");
+    const N = await mkNamed(2, "newer.pdf");
+    const ps = W.__viewer.open(S.file);   // gen1, gated
+    const pn = W.__viewer.open(N);          // gen2, commits
+    const rn = await pn;
+    const newerDoc = W.__viewer._activeDoc();
+    S.release(); const rs = await ps;       // superseded
+    await sleep(150);
+    assert(rn === "success" && rs === "superseded", `results ${rn}/${rs}`);
+    assert(W.__viewer._activeDoc() === newerDoc, "stale candidate replaced state.doc");
+    assert(title() === "newer.pdf", "active not newer");
+  });
+
+  await check("c9. Successful switch destroys the previous active document exactly once", async () => {
+    W.__viewer.exit(); await sleep(60); W.__viewer._reset();
+    await W.__viewer.open(await mkNamed(2, "prevA.pdf")); await sleep(200);
+    const prevDoc = countDestroy(W.__viewer._activeDoc()); // wrap the real prior-active handle
+    await W.__viewer.open(await mkNamed(2, "newB.pdf")); await sleep(200);
+    assert(prevDoc.__dc === 1, "previous active destroyed " + prevDoc.__dc + " times (want 1)");
+    assert(title() === "newB.pdf", "active not B");
+    assert(W.__viewer._activeDoc() !== prevDoc, "state.doc still points at destroyed previous document");
+  });
+
+  await check("c10. Atomic File-set invariant across repeated concurrent attempts", async () => {
+    for (let k = 0; k < 4; k++) {
+      await setupAQ(["A.pdf","B.pdf","C.pdf","D.pdf"]);
+      const q = W.__viewer._queue();
+      const cId = q.find((x) => x.name === "C.pdf").id, dId = q.find((x) => x.name === "D.pdf").id;
+      W.__viewer.openFromQueue(cId); W.__viewer.openFromQueue(dId); // both, no await
+      await sleep(300);
+      const inv = invariantsOk(["A.pdf","B.pdf","C.pdf","D.pdf"]);
+      assert(inv.setOk, `run ${k}: set corrupted -> ${JSON.stringify(qnames())} active ${title()}`);
+      assert(inv.activeNotInQueue && inv.idsUnique && inv.countOk, `run ${k}: invariant broken`);
+    }
+  });
+
+  await check("c11. Commands use the settled active File after concurrent attempts", async () => {
+    await setupAQ(["A.pdf","B.pdf","C.pdf","D.pdf"]);
+    const q = W.__viewer._queue();
+    W.__viewer.openFromQueue(q.find((x) => x.name === "C.pdf").id);
+    W.__viewer.openFromQueue(q.find((x) => x.name === "D.pdf").id);
+    await sleep(300);
+    const settled = title();
+    // Edit handoff spies the tools bridge without changing semantics
+    const origStash = W.__pp.stashLaunchFiles; let handed = null;
+    W.__pp.stashLaunchFiles = (files, tool) => { handed = files; return origStash.call(W.__pp, files, tool); };
+    try {
+      D.querySelector("#pv-edit").click(); await sleep(100);
+      assert(handed && handed.length === 1 && handed[0].name === settled, "Edit handed wrong file: " + (handed && handed[0]?.name));
+    } finally { W.__pp.stashLaunchFiles = origStash; }
+    // return from the tool to a clean state
+    D.querySelector("#back-btn")?.click(); await sleep(80);
+  });
+
+  await check("c12. Busy state fully restored after success, failure and supersession", async () => {
+    // success
+    await setupAQ(["A.pdf","B.pdf"]);
+    await W.__viewer.openFromQueue(W.__viewer._queue()[0].id); await sleep(200);
+    assert($("#pv-queue-panel").getAttribute("aria-busy") === "false", "aria-busy after success");
+    // failure
+    W.__viewer.exit(); await sleep(60); W.__viewer._reset();
+    await W.__viewer.open(await mkNamed(2, "A.pdf")); await sleep(150);
+    const bad = new W.File([new Uint8Array([9,9,9])], "bad.pdf", { type: "application/pdf" });
+    W.__viewer.enqueueForReading([bad]); await sleep(120);
+    await W.__viewer.openFromQueue(W.__viewer._queue()[0].id); await sleep(200);
+    assert($("#pv-queue-panel").getAttribute("aria-busy") === "false", "aria-busy after failure");
+    assert([...D.querySelectorAll('#pv-queue-list [data-action="remove"]')].every((b) => !b.disabled), "controls not restored after failure");
+    W.__viewer.exit(); await sleep(80);
   });
 
   summaryEl.textContent = `${passCount} passed, ${failCount} failed`;
