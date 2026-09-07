@@ -37,6 +37,7 @@
   <main id="main">
     <!-- ============ HOME: tool grid ============ -->
     <section id="view-home" class="view">
+      <div id="home-drop-hint" class="home-drop-hint" aria-hidden="true">Drop PDF files here to read</div>
       <button id="reader-open" class="reader-hero">
         <span class="reader-glyph" aria-hidden="true">☖</span>
         <span class="reader-text">
@@ -212,7 +213,8 @@
         <button id="pv-exit" class="pv-btn" title="Back to tools">←</button>
         <button id="pv-sidebar-toggle" class="pv-btn" title="Toggle sidebar" aria-expanded="false" aria-controls="pv-sidebar">☰</button>
         <button id="pv-open" class="pv-btn" title="Open another PDF">📂</button>
-        <input type="file" id="pv-file" accept="application/pdf,.pdf" hidden>
+        <button id="pv-queue-btn" class="pv-btn" title="Reader queue" aria-expanded="false" aria-controls="pv-queue-panel" disabled>Queue (<span id="pv-queue-count">0</span>)</button>
+        <input type="file" id="pv-file" accept="application/pdf,.pdf" multiple hidden>
         <span id="pv-title" class="pv-title"></span>
         <span class="pv-spacer"></span>
         <button id="pv-prev" class="pv-btn" title="Previous page">‹</button>
@@ -236,6 +238,10 @@
         <button id="pv-print" class="pv-btn" title="Print">⎙</button>
         <button id="pv-download" class="pv-btn" title="Save a copy">⬇</button>
         <button id="pv-edit" class="pv-btn pv-btn-accent" title="Edit with the tools">Edit ✂</button>
+      </div>
+      <div id="pv-queue-panel" class="pv-queue-panel" role="dialog" aria-label="Reader document queue" hidden inert>
+        <div class="pv-queue-head">Reader queue — documents waiting</div>
+        <ul id="pv-queue-list" class="pv-queue-list"></ul>
       </div>
       <div class="pv-body">
         <aside id="pv-sidebar" class="pv-sidebar" inert>

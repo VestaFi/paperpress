@@ -859,3 +859,96 @@ main {
   .pv-print-area { display: block; }
   .pv-print-area img { display: block; width: 100%; page-break-after: always; }
 }
+
+/* ============ Reader document queue ============ */
+#pv-queue-btn { font-size: 12.5px; padding: 0 10px; white-space: nowrap; }
+#pv-queue-btn[aria-expanded="true"] { background: var(--ink); color: var(--paper); }
+
+.pv-queue-panel {
+  position: absolute;
+  top: 52px;
+  left: clamp(8px, 4vw, 120px);
+  z-index: 30;
+  width: min(420px, calc(100vw - 32px));
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--card);
+  border: 2px solid var(--ink);
+  box-shadow: 5px 5px 0 rgba(28,23,18,0.55);
+  border-radius: 2px;
+  padding: 10px;
+}
+.pv-queue-head {
+  font-size: 11.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--press-blue);
+  margin: 2px 4px 10px;
+}
+.pv-queue-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.pv-queue-list:empty::after {
+  content: "The queue is empty.";
+  display: block;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  padding: 6px 4px;
+}
+.pv-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  border-radius: 2px;
+  padding: 6px 8px;
+}
+.pv-queue-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.pv-qbtn {
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.pv-qbtn:hover:not(:disabled) { background: var(--ink); color: var(--paper); }
+.pv-qbtn:disabled { opacity: 0.3; cursor: default; }
+.pv-qbtn-open { background: var(--press-blue); color: #fff; border-color: var(--ink); font-weight: 600; }
+.pv-qbtn-open:hover:not(:disabled) { background: var(--verm); }
+
+/* home drag-and-drop */
+.home-drop-hint {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: none;
+  place-items: center;
+  background: rgba(246, 241, 231, 0.92);
+  border: 4px dashed var(--verm);
+  font-family: "Fraunces", Georgia, serif;
+  font-weight: 900;
+  font-size: clamp(22px, 5vw, 40px);
+  color: var(--verm);
+  pointer-events: none;
+}
+#view-home.drag-over .home-drop-hint { display: grid; }
+
+/* queue busy state during a document switch */
+.pv-queue-panel[aria-busy="true"] .pv-queue-head::after {
+  content: " · opening…";
+  color: var(--verm);
+}
+.pv-queue-row.busy { opacity: 0.6; }
