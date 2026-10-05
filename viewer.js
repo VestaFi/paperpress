@@ -100,7 +100,7 @@
 
     buildShells();
     buildThumbs();
-    buildOutline();
+    void buildOutline(); // handles its own failure inside the Outline tab
     updateZoomLabel();
     scrollEl().scrollTop = 0;
     synchroniseCurrentPage(1); // page-1 field + highlight + aria via the single owner
@@ -176,16 +176,21 @@
     for (const e of entries) {
       const shell = e.target;
       const i = parseInt(shell.dataset.page, 10);
-      if (e.isIntersecting) renderInto(shell, i);
+      if (e.isIntersecting) void renderInto(shell, i); // never rejects; failures stay per page
       else unrender(shell);
     }
   }
 
+  // Fire-and-forget: never rejects. Work for a document that has since been
+  // replaced or closed (doc !== state.doc) is dropped silently — supersession
+  // is not a render failure and must not touch the current document's state.
   async function renderInto(shell, i) {
     if (shell.dataset.rendered === "1" || state.rendering.has(i) || !state.doc) return;
+    const doc = state.doc;
     state.rendering.add(i);
     try {
-      const page = await state.doc.getPage(i);
+      const page = await doc.getPage(i);
+      if (doc !== state.doc) return;
       if (!state.pageDims[i - 1]) {
         const vp1 = page.getViewport({ scale: 1 });
         state.pageDims[i - 1] = { w: vp1.width, h: vp1.height };
@@ -218,14 +223,16 @@
         }).promise;
       } catch { /* selection unavailable — canvas still shows */ }
 
-      if (shell.dataset.rendered === "1") return;
+      if (doc !== state.doc || shell.dataset.rendered === "1") return;
       shell.innerHTML = "";
       shell.append(canvas, tl);
       shell.dataset.rendered = "1";
     } catch (e) {
-      console.warn(`Page ${i} render failed:`, e.message);
+      if (doc === state.doc) console.warn(`Page ${i} render failed:`, e?.message);
     } finally {
-      state.rendering.delete(i);
+      // closeDoc() already cleared the set for a replaced document; deleting
+      // here would drop the new document's in-flight marker for page i.
+      if (doc === state.doc) state.rendering.delete(i);
     }
   }
 
@@ -246,7 +253,7 @@
         const r = shell.getBoundingClientRect();
         const sr = scrollEl().getBoundingClientRect();
         if (r.bottom > sr.top - 900 && r.top < sr.bottom + 900) {
-          renderInto(shell, parseInt(shell.dataset.page, 10));
+          void renderInto(shell, parseInt(shell.dataset.page, 10));
         }
       });
     });
@@ -343,7 +350,7 @@
     state.thumbObserver?.disconnect();
     state.thumbObserver = new IntersectionObserver((entries) => {
       for (const e of entries) {
-        if (e.isIntersecting) renderThumb(e.target);
+        if (e.isIntersecting) void renderThumb(e.target); // never rejects; failure leaves the numbered placeholder
       }
     }, { root: c, rootMargin: "400px 0px" });
 
@@ -380,11 +387,21 @@
 
   // ---------- outline ----------
 
+  // Fire-and-forget: never rejects. An outline that fails to load is reported in
+  // the Outline tab only — it is not a failure to open the PDF. Results for a
+  // document that is no longer active are dropped.
   async function buildOutline() {
+    const doc = state.doc;
     const c = $("#pv-outline");
     c.innerHTML = "";
     let outline = null;
-    try { outline = await state.doc.getOutline(); } catch {}
+    try {
+      outline = await doc.getOutline();
+    } catch {
+      if (doc === state.doc) c.innerHTML = `<p class="pv-empty">Bookmarks couldn't be loaded for this document.</p>`;
+      return;
+    }
+    if (doc !== state.doc) return;
     if (!outline || !outline.length) {
       c.innerHTML = `<p class="pv-empty">No bookmarks in this document.</p>`;
       return;
