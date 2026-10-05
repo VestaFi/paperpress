@@ -1,5 +1,5 @@
 /* PaperPress service worker — precache app shell, runtime-cache fonts. */
-const CACHE = "paperpress-v8";
+const CACHE = "paperpress-v10";
 const SHELL = [
   "./",
   "./index.html",
@@ -44,7 +44,10 @@ self.addEventListener("fetch", (event) => {
       return fetch(req).then((res) => {
         if (res.ok && (isFont || isSameOrigin)) {
           const copy = res.clone();
-          caches.open(CACHE).then((cache) => cache.put(req, copy));
+          // The response is returned without waiting for this write. Failure
+          // (quota, storage blocked) is deliberately non-fatal and not logged:
+          // the resource is simply fetched again next time.
+          event.waitUntil(caches.open(CACHE).then((cache) => cache.put(req, copy)).catch(() => {}));
         }
         return res;
       }).catch(() => {
