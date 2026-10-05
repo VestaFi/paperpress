@@ -97,6 +97,11 @@ normal behaviour and does not affect these assertions.</p>
   const D = frame.contentDocument;
   const $ = (sel) => D.querySelector(sel);
 
+  // Record every unhandled promise rejection in the app realm for the whole
+  // run; r1 (at the end) asserts there were none.
+  const rejections = [];
+  W.addEventListener("unhandledrejection", (e) => rejections.push(String(e.reason?.message ?? e.reason)));
+
   // runtime-generated fixtures via the app's own pdf-lib.
   // Note: no array/object literals from THIS realm may cross into pdf-lib
   // (its type checks fail on cross-realm instances) — addPage() default size.
@@ -1276,6 +1281,141 @@ normal behaviour and does not affect these assertions.</p>
     assert($("#pv-queue-panel").getAttribute("aria-busy") === "false", "aria-busy after failure");
     assert([...D.querySelectorAll('#pv-queue-list [data-action="remove"]')].every((b) => !b.disabled), "controls not restored after failure");
     W.__viewer.exit(); await sleep(80);
+  });
+
+  // ================= handled async promises (fix/handled-async-promises-pr5) =================
+  // Failures are injected by wrapping pdf.js document methods on the real
+  // handle (or its prototype, when the call happens inside open()); every
+  // wrapper is restored in a finally. Console and alert spies likewise.
+  const pageEl = (n) => $(`#pv-pages .pv-page[data-page="${n}"]`);
+  const spyWarnAlert = () => {
+    const s = { warns: [], alerted: false, ow: W.console.warn, oa: W.alert };
+    W.console.warn = (...a) => s.warns.push(a.map(String).join(" "));
+    W.alert = () => { s.alerted = true; };
+    s.restore = () => { W.console.warn = s.ow; W.alert = s.oa; };
+    return s;
+  };
+
+  await check("r2. Outline load failure shows unavailable message; reading continues", async () => {
+    await freshReader("outline-seed.pdf");
+    const proto = Object.getPrototypeOf(W.__viewer._activeDoc());
+    const orig = proto.getOutline;
+    proto.getOutline = function () { return Promise.reject(new Error("outline unavailable")); };
+    try {
+      await W.__viewer.open(await mkNamed(3, "outline-fail.pdf")); await sleep(400);
+    } finally { proto.getOutline = orig; }
+    const txt = $("#pv-outline").textContent;
+    assert(txt.includes("Bookmarks couldn't be loaded for this document."), "unavailable message missing: " + txt);
+    assert(!txt.includes("No bookmarks"), "failure misreported as no bookmarks");
+    assert(title() === "outline-fail.pdf" && $("#pv-count").textContent === "3", "document not open");
+    assert(pageEl(1).dataset.rendered === "1", "page 1 not rendered");
+  });
+
+  await check("r3. PDF without an outline shows 'No bookmarks in this document.'", async () => {
+    await W.__viewer.open(await mkNamed(2, "no-outline.pdf")); await sleep(300);
+    const txt = $("#pv-outline").textContent.trim();
+    assert(txt === "No bookmarks in this document.", "got: " + txt);
+  });
+
+  await check("r4. Stale outline from document A cannot populate document B", async () => {
+    const proto = Object.getPrototypeOf(W.__viewer._activeDoc());
+    const orig = proto.getOutline;
+    let release; const gate = new Promise((r) => { release = r; });
+    let first = true;
+    proto.getOutline = function () {
+      if (first) { first = false; return gate.then(() => [{ title: "STALE-A", dest: null, items: [] }]); }
+      return orig.call(this);
+    };
+    try {
+      await W.__viewer.open(await mkNamed(2, "outline-A.pdf")); await sleep(150);
+      await W.__viewer.open(await mkNamed(2, "outline-B.pdf")); await sleep(300);
+    } finally { proto.getOutline = orig; }
+    release(); await sleep(150); // A's outline now resolves, after B is active
+    const txt = $("#pv-outline").textContent;
+    assert(title() === "outline-B.pdf", "active changed: " + title());
+    assert(!txt.includes("STALE-A"), "A's bookmarks leaked into B's outline");
+    assert(txt.trim() === "No bookmarks in this document.", "B's outline state wrong: " + txt);
+  });
+
+  await check("r5. One page failing to render: page blank, marker clears, others usable, no alert", async () => {
+    await W.__viewer.open(await mkNamed(3, "render-fail.pdf")); await sleep(400);
+    await setZoom("50");
+    const doc = W.__viewer._activeDoc();
+    const orig = doc.getPage;
+    // non-Error rejection value: the catch block itself must not throw
+    doc.getPage = function (n) { return n === 2 ? Promise.reject(undefined) : orig.call(this, n); };
+    const s = spyWarnAlert();
+    const rej0 = rejections.length;
+    try {
+      await setZoom("100"); await sleep(300); // rerenderAll → explicit renderInto path
+      assert(pageEl(2).dataset.rendered !== "1", "page 2 rendered despite failure");
+      assert(pageEl(1).dataset.rendered === "1", "page 1 not rendered");
+      assert(s.warns.some((w) => w.includes("Page 2 render failed")), "no per-page warning: " + JSON.stringify(s.warns));
+      assert(s.warns.every((w) => !w.includes("render-fail")), "filename in warning");
+      assert(s.warns.length <= 3, "repeated warnings (retry loop?): " + s.warns.length);
+      assert(!s.alerted, "alert shown for a page render failure");
+      await sleep(100);
+      assert(rejections.length === rej0, "unhandled rejection: " + rejections.slice(rej0).join(" | "));
+    } finally { doc.getPage = orig; s.restore(); }
+    await setZoom("50"); await sleep(300); // getPage works again → page 2 must render
+    assert(pageEl(2).dataset.rendered === "1", "page 2 cannot render after recovery — rendering marker stuck");
+  });
+
+  await check("r6. Superseded document's pending render is dropped silently", async () => {
+    await W.__viewer.open(await mkNamed(3, "super-A.pdf")); await sleep(400);
+    const docA = W.__viewer._activeDoc();
+    const orig = docA.getPage;
+    let release; const gate = new Promise((r) => { release = r; });
+    docA.getPage = function (n) { return gate.then(() => orig.call(this, n)); };
+    const s = spyWarnAlert();
+    const rej0 = rejections.length;
+    try {
+      await setZoom("50"); // A's page renders now wait on the gate
+      await W.__viewer.open(await mkNamed(2, "super-B.pdf")); await sleep(300);
+      release(); await sleep(400); // A's work resumes against its destroyed document
+      assert(title() === "super-B.pdf" && W.__viewer._activeDoc() !== docA, "active document changed");
+      assert($("#pv-count").textContent === "2" && D.querySelectorAll("#pv-pages .pv-page").length === 2, "B's page shells disturbed");
+      assert(pageEl(1).dataset.rendered === "1", "B page 1 not rendered");
+      assert(!s.warns.some((w) => /render failed/.test(w)), "misleading render-failure report: " + JSON.stringify(s.warns));
+      assert(!s.alerted, "alert shown");
+      assert(rejections.length === rej0, "unhandled rejection: " + rejections.slice(rej0).join(" | "));
+    } finally { docA.getPage = orig; s.restore(); }
+  });
+
+  await check("r7. Thumbnail failure leaves numbered placeholder; reading unaffected", async () => {
+    await freshReader("thumb-seed.pdf");
+    const proto = Object.getPrototypeOf(W.__viewer._activeDoc());
+    const orig = proto.getPage;
+    proto.getPage = function (n) { return n === 2 ? Promise.reject(new Error("page unavailable")) : orig.call(this, n); };
+    const s = spyWarnAlert();
+    const rej0 = rejections.length;
+    try {
+      await W.__viewer.open(await mkNamed(3, "thumb-fail.pdf")); await sleep(300);
+      D.querySelector("#pv-sidebar-toggle").click(); await sleep(500);
+      const t1 = $('#pv-thumbs .pv-thumb[data-page="1"]');
+      const t2 = $('#pv-thumbs .pv-thumb[data-page="2"]');
+      assert(t1.querySelector("canvas"), "thumbnail 1 not rendered");
+      assert(t2.querySelector(".pv-thumb-no")?.textContent === "2", "thumbnail 2 label missing");
+      assert(!t2.querySelector("canvas"), "thumbnail 2 rendered despite failure");
+      assert(t2.dataset.done === "0", "retry state not available: done=" + t2.dataset.done);
+      D.activeElement?.blur(); // synthetic click doesn't move focus; a focused page field is never overwritten
+      t2.click(); await sleep(300);
+      assert($("#pv-pageno").value === "2", "navigation via failed thumbnail broken: " + $("#pv-pageno").value);
+      assert(pageEl(1).dataset.rendered === "1" || pageEl(3).dataset.rendered === "1", "no pages render");
+      assert(!s.alerted, "alert shown");
+      await sleep(100);
+      assert(rejections.length === rej0, "unhandled rejection: " + rejections.slice(rej0).join(" | "));
+    } finally {
+      proto.getPage = orig; s.restore();
+      if ($("#pv-sidebar").classList.contains("open")) D.querySelector("#pv-sidebar-toggle").click();
+      W.__viewer.exit(); await sleep(80);
+    }
+  });
+
+  // r1 runs last so it covers the complete harness run.
+  await check("r1. No unhandled promise rejections across the complete run", async () => {
+    await sleep(300);
+    assert(rejections.length === 0, `${rejections.length} unhandled: ` + rejections.slice(0, 3).join(" | "));
   });
 
   summaryEl.textContent = `${passCount} passed, ${failCount} failed`;
